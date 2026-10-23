@@ -10,24 +10,14 @@ die(){  printf '\033[31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 ask(){  local p="$1" d="${2:-}" a; read -rp "$p${d:+ [$d]}: " a; echo "${a:-$d}"; }
 rand(){ head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24; }
 
-# ── docker 환경 감지 / 자동 설치 ──────────────────
+# ── docker 환경 감지 ──────────────────────────
+# Audit patch (artex-audit 2026-10): 원격 스크립트 자동 설치(curl|sh) 제거.
+# docker 가 없으면 공식 문서 안내 후 중단합니다.
 ensure_docker(){
   if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     ok "docker 와 docker compose 를 확인했습니다"; return
   fi
-  warn "docker / docker compose 를 찾을 수 없습니다"
-  case "$(uname -s)" in
-    Linux)
-      if [ "$(ask 'Docker 를 자동으로 설치할까요? (y/n)' y)" = y ]; then
-        curl -fsSL https://get.docker.com | sh
-        sudo usermod -aG docker "$USER" || true
-        ok "Docker 설치를 완료했습니다 (사용자 그룹 변경은 다시 로그인해야 sudo 없이 적용됩니다)"
-      else
-        die "docker 를 직접 설치한 뒤 다시 실행해 주세요"
-      fi ;;
-    Darwin) die "macOS 에서는 Docker Desktop 을 설치해 주세요: https://www.docker.com/products/docker-desktop/" ;;
-    *)      die "docker 를 직접 설치한 뒤 다시 실행해 주세요" ;;
-  esac
+  die "docker / docker compose 를 찾을 수 없습니다. 공식 문서를 따라 직접 설치한 뒤 다시 실행해 주세요: https://docs.docker.com/engine/install/"
 }
 
 # ── ① 전부 Docker ──────────────────────────────

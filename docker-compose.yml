@@ -17,7 +17,9 @@ services:
   artex:
     # 이 포크가 릴리스 태그(v*)마다 GitHub Container Registry 에 발행하는 이미지입니다
     # (.github/workflows/release.yml 의 docker 잡). 상류 autumn27/artex 는 Docker Hub 에서 내려갔습니다.
-    image: ghcr.io/jiwoochris/artex-global:${ARTEX_TAG:-latest}
+    # Audit patch (artex-audit 2026-10): 'latest' 기본값 제거 — ARTEX_TAG 를 명시적으로
+    # 고정하지 않으면 기동을 거부합니다 (공급망 고정, 예: v0.3.15-global.1).
+    image: ghcr.io/jiwoochris/artex-global:${ARTEX_TAG:?ARTEX_TAG must be pinned to a release tag (e.g. v0.3.15-global.1), not latest}
     depends_on:
       postgres:
         condition: service_healthy
