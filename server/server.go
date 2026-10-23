@@ -92,6 +92,7 @@ const (
 
 	// LLM 연결 테스트·웹 검색 프로브 (writeJSON {ok:false, error:…}, 설정 화면 점검 결과)
 	errLLMTestNoAPIKey         = "API Key가 제공되지 않았습니다"
+	errLLMTestEmptyConfig      = "공급자 구성이 비어 있습니다: provider/base_url/api_key 또는 profile_id를 지정해 주세요 (비어 있으면 기본 엔드포인트로 요청이 새어나갑니다)"
 	errWebSearchProbeNoResults = "검색 결과가 0건입니다(요청이 제한되었거나 프록시가 연결되지 않았을 수 있습니다)"
 )
 
@@ -1155,26 +1156,33 @@ func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 	for _, t := range list {
 		dto := taskDTO(t, s.resolvedTaskStatus(t))
 		applyTaskArchiveBlocker(&dto, archiveBlockers)
-		metric := metrics[t.ExpID]
-		dto.Tokens = tokenTotalDTO(metric.Tokens)
-		// prefer the live in-memory heartbeat (fresher) and fall back to the
-		// persisted max activity time (survives restarts) for run-duration display.
-		dto.LastActivity = metric.LastActivity
-		if live := s.engine.LastActivity(t.ID); live > dto.LastActivity {
-			dto.LastActivity = live
-		}
-		dto.GoalsTotal = metric.Goals.Total
-		dto.GoalsMet = metric.Goals.Met
-		dto.InFlight = metric.RunningIntents
-		dto.Findings = FindingSeverityDTO{
-			Critical: metric.Findings.Critical,
-			High:     metric.Findings.High,
-			Medium:   metric.Findings.Medium,
-			Low:      metric.Findings.Low,
-		}
+		s.applyTaskMetrics(&dto, t, metrics[t.ExpID])
 		dtos = append(dtos, dto)
 	}
 	writeJSON(w, 200, map[string]any{"tasks": dtos, "active": active})
+}
+
+// applyTaskMetrics fills a TaskDTO with the DB aggregates (tokens, goals, in-flight
+// intents, findings, last activity) so every task view reports the same numbers.
+// Single-task endpoints (getTask) used to skip this entirely and answered 0/0
+// tokens for a finished run — the list view had the real numbers all along.
+func (s *Server) applyTaskMetrics(dto *TaskDTO, t *Task, metric db.TaskListMetrics) {
+	dto.Tokens = tokenTotalDTO(metric.Tokens)
+	// prefer the live in-memory heartbeat (fresher) and fall back to the
+	// persisted max activity time (survives restarts) for run-duration display.
+	dto.LastActivity = metric.LastActivity
+	if live := s.engine.LastActivity(t.ID); live > dto.LastActivity {
+		dto.LastActivity = live
+	}
+	dto.GoalsTotal = metric.Goals.Total
+	dto.GoalsMet = metric.Goals.Met
+	dto.InFlight = metric.RunningIntents
+	dto.Findings = FindingSeverityDTO{
+		Critical: metric.Findings.Critical,
+		High:     metric.Findings.High,
+		Medium:   metric.Findings.Medium,
+		Low:      metric.Findings.Low,
+	}
 }
 
 func (s *Server) resolvedTaskStatus(t *Task) string {
@@ -1431,6 +1439,15 @@ func (s *Server) setLLM(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
+	// An identity-less config must be rejected outright. ConfigFrom silently
+	// defaults the provider to anthropic (claude-opus), and with the global-key
+	// fallback below an empty POST would persist an active profile the user never
+	// chose — same silent-default class the /api/llm/test guard closes.
+	if strings.TrimSpace(req.Provider) == "" && strings.TrimSpace(req.Model) == "" &&
+		strings.TrimSpace(req.BaseURL) == "" && strings.TrimSpace(req.APIKey) == "" {
+		writeErr(w, 400, "empty LLM config: provider, model, base_url or api_key is required (refusing to fall back to a default provider)")
+		return
+	}
 	cfg := agent.ConfigFrom(req.Provider, req.Model, req.BaseURL, req.APIKey, req.Proxy)
 	cfg.RatePerSecond, cfg.RatePerMinute = req.RatePerSecond, req.RatePerMinute
 	cfg.ThinkingType = req.ThinkingType
@@ -1490,6 +1507,13 @@ func (s *Server) testLLM(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
+	// Пустой конфиг = тест неизвестно чего: ConfigFrom молча дефолтит на
+	// anthropic-эндпоинт и уводит запрос наружу (bench 2026-10-23: тест с
+	// одним {"prompt"} ударил в api.anthropic.com). Требуем явную конфигурацию.
+	if req.Provider == "" && req.BaseURL == "" && req.APIKey == "" && req.ProfileID == nil {
+		writeErr(w, 400, trMsg(errLLMTestEmptyConfig))
+		return
+	}
 	cfg := agent.ConfigFrom(req.Provider, req.Model, req.BaseURL, req.APIKey, req.Proxy)
 	// mirror production: send the SAME thinking params so a provider that rejects the
 	// reasoning_effort/thinking field fails the test too (no false "test ok, run 400").
@@ -1516,6 +1540,18 @@ func (s *Server) testLLM(w http.ResponseWriter, r *http.Request) {
 				cfg.SessionHeaderKey = p.SessionHeaderKey
 			}
 		}
+	}
+	// Empty/incomplete config must never silently become a DEFAULT provider.
+	// ConfigFrom turns an all-empty request into anthropic/claude-opus with an
+	// empty base URL, and the key fallback below then attaches the global key —
+	// so a POST with no body worth the name dials api.anthropic.com with a key
+	// minted for a different provider (caught red-handed by the bench egress
+	// relay). Require some identity: an explicit provider/model/base_url, a key,
+	// or a saved profile to test against.
+	if strings.TrimSpace(req.Provider) == "" && strings.TrimSpace(req.Model) == "" &&
+		strings.TrimSpace(req.BaseURL) == "" && strings.TrimSpace(req.APIKey) == "" && req.ProfileID == nil {
+		writeErr(w, 400, "no LLM config supplied: pass provider/model/base_url/api_key or profile_id (refusing to fall back to a default provider)")
+		return
 	}
 	if cfg.APIKey == "" {
 		s.cfgMu.Lock()
@@ -1844,6 +1880,13 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 	dto := taskDTO(t, s.resolvedTaskStatus(t))
 	archiveBlockers, _ := s.m.PG().TaskArchiveBlockers()
 	applyTaskArchiveBlocker(&dto, archiveBlockers)
+	// Same aggregates the task list shows (tokens, goals, findings, last
+	// activity). Previously this endpoint returned zeroes for all of them, so a
+	// finished task polled via /api/task/{id} looked like it spent 0 tokens
+	// even while the ledger and the list view held the real numbers.
+	if metric, err := s.m.PG().TaskListMetrics(t.ExpID); err == nil {
+		s.applyTaskMetrics(&dto, t, metric)
+	}
 	writeJSON(w, 200, dto)
 }
 

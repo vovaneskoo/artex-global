@@ -222,17 +222,17 @@ func TestServerHandlersResponsesLocalized(t *testing.T) {
 			want:    errAssetIDRequired,
 		},
 		{
-			// F34(b): profile_id 를 비우고(=DB 미조회) api_key 도 비우면 TestConnection
-			// 전에 writeJSON{ok:false,error}로 반환한다(status 200). liveServer 는
-			// llmCfg.APIKey 도 "" 라 전역 폴백 키도 없다.
-			name: "testLLM/no-api-key",
+			// bench 2026-10-23: 빈 구성 + 전역 키 존재 시 기본(anthropic) 엔드포인트로
+			// 키가 새어나가는 것을 막는다 — 빈 구성은 400 (F34b의 no-key 그레이스풀 판정은
+			// provider/base_url가 온 경우에만 도달한다).
+			name: "testLLM/empty-config",
 			req: func() *http.Request {
 				return httptest.NewRequest(http.MethodPost, "/api/llm/test", strings.NewReader(`{}`))
 			},
 			handler: func(s *Server) http.HandlerFunc { return s.testLLM },
 			server:  liveServer,
-			code:    http.StatusOK,
-			want:    errLLMTestNoAPIKey,
+			code:    http.StatusBadRequest,
+			want:    errLLMTestEmptyConfig,
 		},
 	}
 

@@ -44,5 +44,8 @@ func (m *meteredTool) Call(ctx context.Context, input json.RawMessage, tc *actoo
 	}); err != nil {
 		log.Printf("[toolusage] insert %s: %v", m.toolKey, err)
 	}
-	return m.CoreTool.Call(ctx, input, tc)
+	res, err := m.CoreTool.Call(ctx, input, tc)
+	// единая точка обёртки всех каталог-тулов: бинарный вывод не должен
+	// отравлять историю диалога (см. SanitizeToolResult)
+	return SanitizeToolResult(res), err
 }
