@@ -30,6 +30,11 @@ const META_BY_LOCALE: Record<Locale, { title: string; description: string }> = {
     title: "ARTEX: 自律型ペネトレーションテストコンソール",
     description: "LLM を活用して自律的にペネトレーションテストを行うシステムコンソール",
   },
+  ru: {
+    title: "ARTEX: консоль автономного тестирования на проникновение",
+    description:
+      "Системная консоль на базе LLM для автономного тестирования на проникновение",
+  },
 };
 
 export const APP_CONFIG = {
