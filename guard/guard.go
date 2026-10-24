@@ -1,8 +1,9 @@
 // Package guard implements the safety boundary layer (docs §11): an audit log,
-// user-configured intercept-rule evaluation, and Observer/G5 failure attribution.
-// Every tool call passes through the PreToolUse hook before executing.
-// (The RoE authorization-scope mechanism was removed; a replacement may be added
-// later.) Destructive/exfil gating is no longer hard-coded here — it lives in the
+// user-configured intercept-rule evaluation, Observer/G5 failure attribution,
+// and opt-in strict-scope enforcement (scope.go, ARTEX_STRICT_SCOPE). Every tool
+// call passes through the PreToolUse hook before executing. (The old RoE
+// authorization-scope mechanism was removed; strict-scope is its successor.)
+// Destructive/exfil gating is no longer hard-coded here — it lives in the
 // DB intercept rules (seeded as ordinary [内置] rules, so users can disable or
 // delete them), evaluated via applyIntercept.
 package guard
@@ -34,6 +35,7 @@ type Guard struct {
 	attrib      map[string]int // failure attribution counts (Observer / G5)
 	reg         *hook.Registry
 	interceptor *intercept.Interceptor // optional; nil disables user-configured rules
+	scopeSrc    ScopeSource            // optional; strict-scope allow-list source (scope.go)
 }
 
 // New creates a Guard without user-configured intercept rules (used for pentest
@@ -75,6 +77,11 @@ func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) hook.Result {
 		cmd = in.Text
 	}
 	g.record(ev.ToolName, "allow", "", cmd)
+	// Strict scope first: platform scope must not be widen-able by a user
+	// allow-rule, so it is enforced before (and regardless of) applyIntercept.
+	if res, blocked := g.applyStrictScope(ctx, ev, cmd); blocked {
+		return res
+	}
 	return g.applyIntercept(ctx, ev)
 }
 
