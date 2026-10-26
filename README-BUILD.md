@@ -194,6 +194,8 @@ curl -s "http://127.0.0.1:8790${switcher}" | grep -cF 'Русский'          
 
 Проверенные строки ru.json в чанке локалей (в серии все count=1): «Настройки системы», «Блокировка активов», «Условия использования ARTEX и отказ от ответственности», «Статья 1 · Определения и лицензия», «Сменить пароль», «Страница не найдена», «Потребление токенов LLM», «Версия · », «С возвращением. Введите пароль, чтобы продолжить работу с ARTEX.».
 
+Живая браузерная проверка (финальная E2E второй серии 2026-10-24, пройдена): `localStorage` `artex_locale=ru` → живой русский UI, вход выполнен, ошибок рендера нет.
+
 **(d) Язык сервера:**
 
 ```bash
@@ -235,7 +237,40 @@ docker rm -f artex-ui-test              # контейнер был --rm; про
 - **`server/webui/dist` и `web/out` коммитить нельзя** — оба в .gitignore (проверено: `/server/webui/dist/` в `src/.gitignore`, `/out/` в `web/.gitignore`). Артефакт сборки живёт только локально; CI-путь — `ARTEX_SKIP_FRONTEND=1` с заранее подготовленным `dist` (`build.sh:18,114-115`), при отсутствии каталога build.sh падает.
 - **Устаревший `dist` = бинарь без свежих текстов.** `go:embed` вбирает то, что лежит в `server/webui/dist` на момент компиляции: если после правок фронтенда не повторить шаги 3.2–3.4, бинарь соберётся со старыми строками (или вовсе с чужим/пустым содержимым — `embed` пустого каталога падает на компиляции). Симптом устаревшего диста в рантайме — русские/новые строки отсутствуют в чанках при живом старому UI. Бинарь без `-tags embedui` — всегда корейский стаб 404 (`server/webui_stub.go:16`).
 - **`npm run check:i18n` — гейт паритета локалей** перед сборкой: сверяет наборы ключей всех локалей против `ko.json` (2996 ключей). Прогнан при написании runbook'а и повторён в серии приёмки §6 (2026-10-24): exit 0, <1 с, `en/zh/es/ja/ru` — все совпадают. Скрипт — `web/package.json:18` → `src/scripts/check-i18n-keys.ts`. Падение = рассинхрон `messages/*.json`, фронтенд соберётся с неполным переводом.
-- **Объём перевода `ru` в этой волне — оболочка консоли, не весь UI.** Паритет ключей полный (2996), но русский текст имеют 353 ключа (12%); 2643 значения байт-в-байт совпадают с `en.json`, и в 39 секциях нет ни одной русской строки — включая основные экраны: `taskDetail` (327), `tasksPage` (297), `llmPage` (172), `findings` (165), `approval` (142), `notifyPage` (141), `interceptPage` (123), `sessions` (109), `skillsPage` (95), `assets` (82), `toolsPage` (80), `chat` (69), `traffic` (62), `assetSync` (56), `taskTemplate` (45), `trafficEvidence` (45) и др. Переведены полностью `auth` (59/59), `status` (45/45), `header`, `notFound`, `search`, `userMenu`, `pagination`, `copyButton`, `changePasswordDialog`; почти целиком `dashboard` (77/78), `settingsPage` (119/121), `nav` (21/23) — часть совпадающих с en ключей языконезависима по смыслу (`'IP'`, `'LLM'`, `'MCP'`, `'Docker'`, `' ({size})'`). Пользователь, выбравший «Русский», сейчас увидит ~88% английского текста — это не баг паритета, а фактический масштаб перевода на момент сборки; перевод остальных секций — отдельная задача. Гейт `check:i18n` неперевод не ловит (проверяет только наборы ключей); фактический охват считать так:
+- **Валидатор синтаксиса сообщений en↔ru — второй гейт перед сборкой.** Искажённый плейсхолдер (`{count}` стал `(count)`, потерялась скобка, выпал `<b>`) не ловится ни typecheck, ни паритетом ключей — а роняет страницу при рендере. По каждому ключу сверять баланс скобок, множество `{переменных}` (с учётом вложенных ICU `plural`/`select`) и множество `<тегов>`:
+  ```bash
+  cd web && node <<'EOF'
+  // Валидатор синтаксиса сообщений en<->ru: баланс скобок, множество {переменных}
+  // (с учётом вложенных ICU plural/select) и <тегов>.
+  const F=(o,p="")=>Object.entries(o).flatMap(([k,v])=>typeof v==="object"&&v!==null?F(v,p+k+"."):[[p+k,v]]);
+  const e=new Map(F(require("./messages/en.json")));
+  const r=new Map(F(require("./messages/ru.json")));
+  const vars=s=>{const out=new Set();
+    (function walk(str){let d=0,st=-1;
+      for(let i=0;i<str.length;i++){
+        if(str[i]==="{"){if(d===0)st=i;d++;}
+        else if(str[i]==="}"){d--;if(d===0&&st>=0){const inner=str.slice(st+1,i);
+          const head=inner.split(",")[0].trim();
+          if(/^[A-Za-z0-9_]+$/.test(head))out.add(head);
+          walk(inner);st=-1;}if(d<0)d=0;}}
+    })(s);return [...out].sort().join(" ");};
+  const tags=s=>(s.match(/<\/?[A-Za-z][^>]*>/g)||[]).sort().join(" ");
+  const bal=s=>["{}","[]","()"].every(p=>s.split(p[0]).length===s.split(p[1]).length);
+  let bad=0;
+  for(const [k,v] of e){
+    const ru=r.get(k);
+    if(ru===undefined){console.log("нет ключа в ru:",k);bad++;continue;}
+    if(vars(v)!==vars(ru)){console.log("переменные:",k,"| en:",vars(v),"| ru:",vars(ru));bad++;}
+    if(tags(v)!==tags(ru)){console.log("теги:",k,"| en:",tags(v),"| ru:",tags(ru));bad++;}
+    if(!bal(v)){console.log("дисбаланс скобок en:",k);bad++;}
+    if(!bal(ru)){console.log("дисбаланс скобок ru:",k);bad++;}
+  }
+  console.log(bad===0?`OK: ${e.size} ключей, расхождений нет`:`расхождений: ${bad}`);
+  process.exit(bad===0?0:1);
+  EOF
+  ```
+  Прогнан 2026-10-27 на текущих `messages/en.json`/`ru.json`: `OK: 2996 ключей, расхождений нет`, exit 0. Наивный regex без учёта вложенности ICU даёт ложные срабатывания на `{count, plural, ...}` — поэтому парсер обходит `{...}` рекурсивно.
+- **Перевод `ru` покрывает все секции.** Замер 2026-10-27 (однострочник ниже): переведено 2966 из 2996 ключей, секций без перевода — 0. Первая серия 2026-10-24 перевела 353 ключа (~12%, оболочка консоли), вторая серия того же дня добавила ещё 2638 ключей — основные экраны (`taskDetail`, `tasksPage`, `findings`, `llmPage`, `chat` и др.) теперь на русском. Оставшиеся 30 значений байт-в-байт совпадают с `en.json` и остаются латиницей по смыслу — это норма, не недоперевод: типы активов (`IP` ×13, `ICP` ×2, `CIDR`), имена продуктов (`LLM`, `MCP`, `Docker`, `Telegram`, `DingTalk`, `Feishu`, `WeCom`), `'JSON (.json)'`, URL-плейсхолдер `http://your-host:8082/mcp` и чистые шаблоны без слов (`'{shown}/{total}'`, `'{turns}×'`, `'{name} ({count})'`, `' ({size})'` и т.п.). Гейт `check:i18n` неперевод не ловит (проверяет только наборы ключей); фактический охват считать так:
   ```bash
   cd web && node -e 'const F=(o,p="")=>Object.entries(o).flatMap(([k,v])=>typeof v==="object"&&v!==null?F(v,p+k+"."):[[p+k,v]]);const e=F(require("./messages/en.json")),r=new Map(F(require("./messages/ru.json")));console.log("переведено:",e.filter(([k,v])=>r.get(k)!==v).length,"из",e.length)'
   ```

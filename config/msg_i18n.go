@@ -41,7 +41,7 @@ var logCatalog = map[string]map[string]string{
 		"es": "[config] archivo de configuración: %s (no encontrado · usando solo la variable de entorno ARTEX_PG_DSN)", "ja": "[config] 設定ファイル: %s (ファイルなし · 環境変数 ARTEX_PG_DSN のみ使用)", "ru": "[config] файл конфигурации: %s (не найден · используется только переменная окружения ARTEX_PG_DSN)",
 	},
 	"[config] skill 디렉터리: %s": {
-		"en": "[config] skill directory: %s", "zh": "[config] skill 目录: %s", "es": "[config] directorio de skills: %s", "ja": "[config] スキルディレクトリ: %s", "ru": "[config] каталог skill: %s",
+		"en": "[config] skill directory: %s", "zh": "[config] skill 目录: %s", "es": "[config] directorio de skills: %s", "ja": "[config] スキルディレクトリ: %s", "ru": "[config] каталог навыков (skills): %s",
 	},
 	"일시정지됨": {"en": "paused", "zh": "已暂停", "es": "pausada", "ja": "一時停止しました", "ru": "приостановлено"},
 	"재개됨":   {"en": "resumed", "zh": "已恢复", "es": "reanudada", "ja": "再開しました", "ru": "возобновлено"},
@@ -141,7 +141,7 @@ var logCatalog = map[string]map[string]string{
 	"[mcp] %s 에서 도구 %d개를 발견해 캐시했습니다": {
 		"en": "[mcp] from %s, discovered and cached %d tool(s)",
 		"zh": "[mcp] 从 %s 发现并缓存了 %d 个工具",
-		"es": "[mcp] desde %s, se descubrieron y almacenaron en caché %d herramienta(s)", "ja": "[mcp] %s からツールを %d 件検出し、キャッシュしました", "ru": "[mcp] из %s обнаружено и закэшировано инструментов: %d",
+		"es": "[mcp] desde %s, se descubrieron y almacenaron en caché %d herramienta(s)", "ja": "[mcp] %s からツールを %d 件検出し、キャッシュしました", "ru": "[mcp] из %s инструментов обнаружено и закэшировано: %d",
 	},
 	"[mcp] 시작 시 자동 발견: 목록을 읽지 못했습니다: %v": {
 		"en": "[mcp] auto-discovery at startup: failed to read the list: %v",
