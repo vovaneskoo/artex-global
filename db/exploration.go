@@ -1390,6 +1390,77 @@ func (d *DB) TaskListMetricsAll() (map[int64]TaskListMetrics, error) {
 	return out, rows.Err()
 }
 
+// TaskListMetrics returns the same aggregates as TaskListMetricsAll for ONE
+// exploration — the shape the single-task endpoint (/api/task/{id}) needs so its
+// DTO carries the same token/goal/finding numbers as the list view, without
+// paying the all-tasks lateral joins on every poll.
+func (d *DB) TaskListMetrics(explorationID int64) (TaskListMetrics, error) {
+	var metrics TaskListMetrics
+	err := d.QueryRow(`
+		SELECT
+		       COALESCE(token_metrics.input_tokens,0),
+		       COALESCE(token_metrics.output_tokens,0),
+		       COALESCE(token_metrics.cache_read_tokens,0),
+		       COALESCE(token_metrics.cache_write_tokens,0),
+		       COALESCE(latest_activity.created_at,0),
+		       COALESCE(goal_metrics.total,0),
+		       COALESCE(goal_metrics.met,0),
+		       COALESCE(intent_metrics.running,0),
+		       COALESCE(finding_metrics.critical,0),
+		       COALESCE(finding_metrics.high,0),
+		       COALESCE(finding_metrics.medium,0),
+		       COALESCE(finding_metrics.low,0)
+		FROM (SELECT $1::bigint AS exploration_id) task
+		LEFT JOIN LATERAL (
+			SELECT SUM(input_tokens) AS input_tokens,
+			       SUM(output_tokens) AS output_tokens,
+			       SUM(cache_read_tokens) AS cache_read_tokens,
+			       SUM(cache_write_tokens) AS cache_write_tokens
+			FROM activity
+			WHERE exploration_id=task.exploration_id AND kind='result'
+		) token_metrics ON true
+		LEFT JOIN LATERAL (
+			SELECT EXTRACT(EPOCH FROM created_at)::bigint AS created_at
+			FROM activity
+			WHERE exploration_id=task.exploration_id
+			ORDER BY created_at DESC
+			LIMIT 1
+		) latest_activity ON true
+		LEFT JOIN LATERAL (
+			SELECT COUNT(*) AS total,
+			       COUNT(*) FILTER (WHERE state='met') AS met
+			FROM exploration_nodes
+			WHERE exploration_id=task.exploration_id AND kind='goal'
+		) goal_metrics ON true
+		LEFT JOIN LATERAL (
+			SELECT COUNT(*) AS running
+			FROM exploration_nodes
+			WHERE exploration_id=task.exploration_id AND kind='intent' AND state='running'
+		) intent_metrics ON true
+		LEFT JOIN LATERAL (
+			SELECT COUNT(*) FILTER (WHERE severity='critical') AS critical,
+			       COUNT(*) FILTER (WHERE severity='high')     AS high,
+			       COUNT(*) FILTER (WHERE severity='medium')   AS medium,
+			       COUNT(*) FILTER (WHERE severity='low')      AS low
+			FROM findings
+			WHERE task_id IN (SELECT id FROM tasks WHERE exploration_id=task.exploration_id)
+		) finding_metrics ON true`, explorationID).Scan(
+		&metrics.Tokens.InputTokens,
+		&metrics.Tokens.OutputTokens,
+		&metrics.Tokens.CacheReadTokens,
+		&metrics.Tokens.CacheWriteTokens,
+		&metrics.LastActivity,
+		&metrics.Goals.Total,
+		&metrics.Goals.Met,
+		&metrics.RunningIntents,
+		&metrics.Findings.Critical,
+		&metrics.Findings.High,
+		&metrics.Findings.Medium,
+		&metrics.Findings.Low,
+	)
+	return metrics, err
+}
+
 // GoalCountsAll returns goal totals (total / met) per exploration id, one query
 // for all tasks — used by listTasks so the task list shows progress for every task.
 func (d *DB) GoalCountsAll() (map[int64]GoalCounts, error) {
