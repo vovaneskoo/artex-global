@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"log"
 	"runtime/debug"
+	"strings"
+	"unicode/utf8"
 
 	actool "github.com/Autumn-27/norma/tool"
+	"github.com/Autumn-27/norma/llm"
 )
 
 // DeferredInfo carries the deferred-tools wiring an agent needs to build its
@@ -88,5 +91,98 @@ func (g *guardedTool) Call(ctx context.Context, in json.RawMessage, tc *actool.T
 			res, err = actool.Errorf(fmt.Sprintf("工具 %s 内部错误：%v（本次调用已失败，可换个参数或改用别的工具）", g.Name(), r)), nil
 		}
 	}()
-	return g.CoreTool.Call(ctx, in, tc)
+	res, err = g.CoreTool.Call(ctx, in, tc)
+	if err == nil {
+		res = sanitizeToolResult(res)
+	}
+	return res, err
+}
+
+// SanitizeControlChars rewrites a string so it is safe to embed in an LLM
+// message history: NUL bytes and C0/C1 control characters (except \t\n\r) are
+// replaced by '�'. This choke point exists because provider APIs reject control
+// characters outright — Anthropic-compatible gateways answer
+// 400 "String must not contain null bytes" (messages[N].content) — and a single
+// binary tool output (head of /dev/urandom, a PNG, a SQLite dump) would
+// otherwise poison the whole session: the invalid bytes stay in the history and
+// EVERY subsequent request of that intent fails. Invalid UTF-8 is also
+// normalized (each bad byte becomes '�') for the same reason: it must survive
+// JSON serialization into the request body.
+//
+// Replacement rather than stripping keeps offsets honest (a model quoting line
+// numbers of its own earlier output is not silently misled) while removing the
+// API-breaking bytes.
+func SanitizeControlChars(s string) string {
+	if s == "" {
+		return s
+	}
+	clean := true
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == 0x00 || (c < 0x20 && c != '\t' && c != '\n' && c != '\r') || c == 0x7f {
+			clean = false
+			break
+		}
+		// C1 controls (U+0080–U+009F) encode in UTF-8 as 0xC2 0x80–0x9F.
+		if c == 0xc2 && i+1 < len(s) && s[i+1] >= 0x80 && s[i+1] <= 0x9f {
+			clean = false
+			break
+		}
+	}
+	if clean && utf8.ValidString(s) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s { // range decodes runes; invalid bytes yield RuneError with size 1
+		switch {
+		case r == utf8.RuneError:
+			// covers both a literal U+FFFD in the input and an undecodable byte:
+			// neither is safe/meaningful to forward
+			b.WriteRune('�')
+		case r == 0x7f || (r < 0x20 && r != '\t' && r != '\n' && r != '\r'):
+			// C0 controls (minus tab/LF/CR) and DEL
+			b.WriteRune('�')
+		case r >= 0x80 && r <= 0x9f:
+			// C1 controls (U+0080–U+009F); JSON-legal but rejected by strict providers
+			b.WriteRune('�')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// sanitizeToolResult rewrites every text surface of a tool result — content
+// blocks (recursively: a tool_result block nests its content) and any Extra
+// messages the tool injects after its result — so no control character or
+// invalid UTF-8 from a tool reaches the conversation history the harness
+// appends and later replays to the provider. Non-text fields (tool_use ids,
+// raw JSON inputs) are model-generated and already JSON-safe.
+func sanitizeToolResult(res actool.Result) actool.Result {
+	for i, blk := range res.Content {
+		res.Content[i] = sanitizeContentBlock(blk)
+	}
+	for mi, msg := range res.Extra {
+		for ci, blk := range msg.Content {
+			msg.Content[ci] = sanitizeContentBlock(blk)
+		}
+		res.Extra[mi] = msg
+	}
+	return res
+}
+
+func sanitizeContentBlock(blk llm.ContentBlock) llm.ContentBlock {
+	if blk.Text != "" {
+		blk.Text = SanitizeControlChars(blk.Text)
+	}
+	if blk.Thinking != "" {
+		blk.Thinking = SanitizeControlChars(blk.Thinking)
+	}
+	if len(blk.Content) > 0 {
+		for i, nested := range blk.Content {
+			blk.Content[i] = sanitizeContentBlock(nested)
+		}
+	}
+	return blk
 }
