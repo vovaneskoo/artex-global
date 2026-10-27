@@ -157,7 +157,9 @@
   "nav": {
     "group": {
       "function": "기능",
-      "system": "시스템"
+      "system": "시스템",
+      "operator": "Operator",
+      "advanced": "Advanced"
     },
     "item": {
       "agents": "에이전트",
@@ -180,7 +182,8 @@
       "tasks": "작업",
       "tools": "도구",
       "traffic": "트래픽",
-      "workspace": "작업 공간"
+      "workspace": "작업 공간",
+      "operator": "Operator"
     }
   },
   "notFound": {
@@ -684,6 +687,17 @@
           "fuzzy_url": "URL(부분 일치)",
           "cidr": "CIDR 대역"
         }
+      }
+    },
+    "budget": {
+      "title": "Budget",
+      "timeout": "Timeout",
+      "minutesShort": "min",
+      "deadline": "Deadline",
+      "remaining": "Remaining",
+      "next": {
+        "title": "Budget is over — what else to try",
+        "hint": "Untested areas and server hints for the same task."
       }
     }
   },
@@ -1481,6 +1495,14 @@
         "verification": "보충 검증",
         "supporting": "보조 증거"
       }
+    },
+    "insights": {
+      "tab": "What's next",
+      "pickHint": "Pick a task to see what is worth testing next.",
+      "taskPlaceholder": "Task",
+      "tasksEmpty": "No tasks found",
+      "tasksFailed": "Failed to load the task list",
+      "tasksRetry": "Retry"
     }
   },
   "copyButton": {
@@ -3760,5 +3782,52 @@
       "name": "취약점 재검증",
       "description": "취약점 상세에서 수동으로 시작해, 원래 증거를 읽고 독립적인 재검증 결론을 저장합니다."
     }
+  },
+  "powerSelector": {
+    "label": "Mission power",
+    "modeAria": "Power mode",
+    "mode": {
+      "recon": "Recon",
+      "standard": "Standard",
+      "full": "Full",
+      "custom": "Custom"
+    },
+    "minutesLabel": "Time budget, min",
+    "minutesHint": "How long the mission may run",
+    "skillsLabel": "Allowed skills",
+    "skillsTrigger": "Select skills",
+    "skillsCount": "{count, plural, one {# skill selected} other {# skills selected}}",
+    "skillsError": "Failed to load skills",
+    "skillsRetry": "Retry",
+    "skillsEmpty": "No skills",
+    "skillsHint": "In custom mode only the selected skills are available"
+  },
+  "insightsCard": {
+    "title": "What's next",
+    "unavailable": "Not available yet",
+    "refresh": "Refresh",
+    "coverage": "Coverage",
+    "untested": "Untested",
+    "suggestions": "Suggestions",
+    "generatedAt": "Generated: {time}"
+  },
+  "operatorPage": {
+    "newMission": "New mission",
+    "goalLabel": "Mission goal",
+    "goalPlaceholder": "Describe what to test…",
+    "targetLabel": "Target",
+    "targetHint": "Companies whose assets join the mission scope",
+    "launch": "Launch mission",
+    "launching": "Launching…",
+    "validateGoal": "Describe the mission goal",
+    "createdToast": "Mission launched",
+    "createFailed": "Failed to launch mission: {msg}",
+    "activeMissions": "Active missions",
+    "noActiveMissions": "No unfinished missions",
+    "allTasks": "All",
+    "recentFindings": "Recent findings",
+    "noFindings": "No findings yet",
+    "allFindings": "All",
+    "timeAgo": "{value} ago"
   }
 }

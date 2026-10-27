@@ -11,6 +11,7 @@ import {
   ClockIcon,
   DownloadIcon,
   InfoIcon,
+  LightbulbIcon,
   SearchIcon,
   ShieldAlertIcon,
   TriangleAlertIcon,
@@ -19,6 +20,7 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { FindingRetestDialog } from "@/components/finding-retest-dialog";
+import { InsightsCard } from "@/components/insights-card";
 import { StatusBadge } from "@/components/status-badge";
 import { TablePagination } from "@/components/table-pagination";
 import { Button } from "@/components/ui/button";
@@ -49,6 +51,7 @@ import type {
   FindingStats,
   FindingStatus,
   Severity,
+  Task,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -69,9 +72,12 @@ const FINDING_LIST_PREFERENCE_KEY = "artex_finding_list_preferences";
 
 // 列表视图:flat = 跨任务平铺大表(默认);grouped = 按任务分组折叠;
 // asset = 左侧资产树 + 右侧该子树下的发现。
-type FindingView = "flat" | "grouped" | "asset";
+// insights = "What's next": not a list view — an insights card for one task,
+// taken straight from the task filter when it names a task, otherwise from a
+// lazily loaded task picker.
+type FindingView = "flat" | "grouped" | "asset" | "insights";
 
-const FINDING_VIEWS: FindingView[] = ["flat", "grouped", "asset"];
+const FINDING_VIEWS: FindingView[] = ["flat", "grouped", "asset", "insights"];
 
 // 资产树的一次性快照。与另外两个视图不同,资产视图不轮询:进入视图、改筛选、
 // 或本页改动了发现之后才重新查询。
@@ -155,6 +161,13 @@ export default function FindingsPage() {
   const [preferencesHydrated, setPreferencesHydrated] = React.useState(false);
   const [page, setPage] = React.useState(1);
   const [pageSize, setPageSize] = React.useState(10);
+  // "What's next" (insights view): the picked task plus the lazily fetched task
+  // options feeding the picker shown when the task filter names no concrete task.
+  const [insightsTaskId, setInsightsTaskId] = React.useState("");
+  const [insightTaskOptions, setInsightTaskOptions] = React.useState<Task[] | null>(null);
+  const [insightTasksLoading, setInsightTasksLoading] = React.useState(false);
+  const [insightTasksFailed, setInsightTasksFailed] = React.useState(false);
+  const insightsTasksRequest = React.useRef(0);
   const [deepenFinding, setDeepenFinding] = React.useState<Finding | null>(null);
   const [retestFinding, setRetestFinding] = React.useState<Finding | null>(null);
   const [activeRetests, setActiveRetests] = React.useState<Record<string, ActiveFindingRetest>>({});
@@ -534,6 +547,7 @@ export default function FindingsPage() {
   // 等偏好水合后再发首个请求,否则会先按默认视图/筛选白拉一次。
   React.useEffect(() => {
     if (!preferencesHydrated) return;
+    if (view === "insights") return; // "What's next" polls nothing: the insights endpoint is server-cached (~60s)
     void activeRetestFingerprint; // 包括不定时轮询的资产视图，也在复测结束后刷新处置状态。
     const refresh = () => {
       if (view === "flat" || view === "asset") {
@@ -600,6 +614,44 @@ export default function FindingsPage() {
       setTask("all");
     }
   }, [stats, statsLoaded, task, vulnclass]);
+
+  // The task filter wins: when it names a concrete task, insights open for it
+  // right away; otherwise the tab shows a picker (kept visible above the card,
+  // pre-filled, so the target task can be switched later).
+  const filterTaskId = task !== "all" && task !== UNASSIGNED_TASK ? task : "";
+
+  // Task options for the "What's next" picker load lazily — only while the tab
+  // is open and no filtered task is set. api.tasks() also covers tasks with
+  // zero findings, which the stats-driven filter select cannot offer. A load
+  // failure is contained: message + retry; retry resets the cache so this
+  // effect runs again.
+  const insightsNeedTaskList = view === "insights" && !filterTaskId;
+  React.useEffect(() => {
+    if (!insightsNeedTaskList || insightTaskOptions || insightTasksLoading) return;
+    const request = ++insightsTasksRequest.current;
+    setInsightTasksLoading(true);
+    setInsightTasksFailed(false);
+    api
+      .tasks()
+      .then((result) => {
+        if (request !== insightsTasksRequest.current) return;
+        setInsightTaskOptions(result.tasks);
+      })
+      .catch(() => {
+        if (request !== insightsTasksRequest.current) return;
+        setInsightTaskOptions([]); // non-null stops the effect; retry resets to null
+        setInsightTasksFailed(true);
+      })
+      .finally(() => {
+        if (request === insightsTasksRequest.current) setInsightTasksLoading(false);
+      });
+  }, [insightTaskOptions, insightTasksLoading, insightsNeedTaskList]);
+
+  const retryInsightTasks = React.useCallback(() => {
+    insightsTasksRequest.current++;
+    setInsightTaskOptions(null);
+    setInsightTasksFailed(false);
+  }, []);
 
   // updateStatus optimistically flips one finding's triage state, reverting on error.
   const updateStatus = React.useCallback(
@@ -828,6 +880,7 @@ export default function FindingsPage() {
             <TabsTrigger value="flat">{t("view.flat")}</TabsTrigger>
             <TabsTrigger value="grouped">{t("view.grouped")}</TabsTrigger>
             <TabsTrigger value="asset">{t("view.asset")}</TabsTrigger>
+            <TabsTrigger value="insights">{t("insights.tab")}</TabsTrigger>
           </TabsList>
         </Tabs>
       </div>
@@ -1130,6 +1183,61 @@ export default function FindingsPage() {
               }}
               pageSizeOptions={[5, 10, 20]}
             />
+          </div>
+        )}
+
+        {view === "insights" && (
+          <div className="flex flex-col gap-4">
+            {filterTaskId ? (
+              <InsightsCard taskId={filterTaskId} />
+            ) : (
+              <>
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <LightbulbIcon className="size-4 text-amber-500" /> {t("insights.tab")}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-3">
+                    <p className="text-muted-foreground text-sm">{t("insights.pickHint")}</p>
+                    {insightTasksFailed ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-destructive text-sm">{t("insights.tasksFailed")}</span>
+                        <Button variant="outline" size="xs" onClick={retryInsightTasks}>
+                          {t("insights.tasksRetry")}
+                        </Button>
+                      </div>
+                    ) : insightTasksLoading ? (
+                      <Spinner className="size-4" />
+                    ) : (
+                      <Select value={insightsTaskId} onValueChange={setInsightsTaskId}>
+                        <SelectTrigger size="sm" className="w-72">
+                          <SelectValue placeholder={t("insights.taskPlaceholder")} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(insightTaskOptions ?? []).length === 0 ? (
+                            <p className="text-muted-foreground px-2 py-1.5 text-sm">{t("insights.tasksEmpty")}</p>
+                          ) : null}
+                          {(insightTaskOptions ?? []).map((taskOpt) => {
+                            const id = String(taskOpt.id);
+                            const label =
+                              taskOpt.name || taskOpt.description || t("task.deletedShort", { id });
+                            return (
+                              <SelectItem key={id} value={id}>
+                                <span className="block max-w-[20rem] truncate" title={label}>
+                                  {label}
+                                </span>
+                              </SelectItem>
+                            );
+                          })}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </CardContent>
+                </Card>
+                {insightsTaskId ? <InsightsCard taskId={insightsTaskId} /> : null}
+              </>
+            )}
           </div>
         )}
       </div>

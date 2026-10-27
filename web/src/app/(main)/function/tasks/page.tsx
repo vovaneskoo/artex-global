@@ -46,6 +46,11 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { AssetInterceptRulesEditor } from "@/components/asset-intercept-rules-editor";
+import {
+  DEFAULT_POWER_SELECTION,
+  PowerSelector,
+  type PowerSelection,
+} from "@/components/power-selector";
 import { StatusBadge } from "@/components/status-badge";
 import { TablePagination } from "@/components/table-pagination";
 import { TaskLLMProfileChain } from "@/components/task-llm-profile-chain";
@@ -3158,7 +3163,13 @@ function CreateTaskSheet({
   const [companyIDs, setCompanyIDs] = React.useState<number[]>([]);
   const [llmProfileIDs, setLLMProfileIDs] = React.useState<string[]>([]);
   const [creating, setCreating] = React.useState(false);
-  const [timeoutMin, setTimeoutMin] = React.useState(""); // 任务级超时(分钟);空/0 = 不限时
+  // 任务级超时(分钟);空/0 = 不限时。由功率选择器驱动(пресет/минуты пишутся сюда),
+  // ручное поле в Advanced остаётся и приоритетно до сабмита.
+  const [timeoutMin, setTimeoutMin] = React.useState(String(DEFAULT_POWER_SELECTION.minutes));
+  // Мощность миссии: пресеты бюджета (recon/standard/full) + custom-белый список
+  // скиллов. Управляет таймаутом через timeoutMin; skills_mode/allowed_skills
+  // уходят в тело POST (опциональные поля контракта, см. createTask ниже).
+  const [power, setPower] = React.useState<PowerSelection>(DEFAULT_POWER_SELECTION);
   const [heartbeatMin, setHeartbeatMin] = React.useState("10"); // planner 心跳(分钟);默认10,下限10(与后端一致)
   const [seedFirstIntent, setSeedFirstIntent] = React.useState(false); // 创建时下发种子意图,worker 免等首轮 planner 直接开跑;默认关闭,走标准先规划再执行
   const [coverageEnabled, setCoverageEnabled] = React.useState(true); // 资产覆盖度功能;默认开。关闭=不计算/展示覆盖度、不累积范围、隐藏范围类工具(company 关联不受影响)
@@ -3217,7 +3228,15 @@ function CreateTaskSheet({
     try {
       const timeoutSec = Math.max(0, Math.floor(Number(timeoutMin) || 0)) * 60;
       const heartbeatSec = Math.max(10, Math.floor(Number(heartbeatMin) || 10)) * 60; // 下限 10min，与后端归一一致
-      await api.createTask({
+      // skills_mode/allowed_skills — опциональные поля контракта задачи
+      // (recon|standard|full|custom; whitelist только при custom). Параллельная
+      // сессия добавляет их в input-тип api.createTask и в тело POST; до влития
+      // поля едут через intersection-тип (лишние для старого билдера поля он
+      // молча отбросит, контракт останется корректным).
+      const input: Parameters<typeof api.createTask>[0] & {
+        skillsMode?: PowerSelection["mode"];
+        allowedSkills?: string[];
+      } = {
         name: name.trim(),
         categoryId: categoryID,
         description: description.trim(),
@@ -3232,7 +3251,10 @@ function CreateTaskSheet({
         interceptRules: interceptRules
           .map((r) => ({ ...r, pattern: r.pattern.trim() }))
           .filter((r) => r.pattern !== ""),
-      });
+        skillsMode: power.mode,
+        ...(power.mode === "custom" ? { allowedSkills: power.allowedSkills } : {}),
+      };
+      await api.createTask(input);
       toast.success(t("create.createdToast"));
       setName("");
       setCategoryID(undefined);
@@ -3242,7 +3264,8 @@ function CreateTaskSheet({
       setSourceTaskIDs([]);
       setCompanyIDs([]);
       setLLMProfileIDs([]);
-      setTimeoutMin("");
+      setPower(DEFAULT_POWER_SELECTION);
+      setTimeoutMin(String(DEFAULT_POWER_SELECTION.minutes));
       setHeartbeatMin("10");
       setSeedFirstIntent(false);
       setCoverageEnabled(true);
@@ -3393,6 +3416,20 @@ function CreateTaskSheet({
                 portalContainer={sheetContentRef}
               />
               <FieldDescription>{t("create.llmHint")}</FieldDescription>
+            </Field>
+
+            {/* Мощность миссии: пресеты бюджета + (custom) белый список скиллов.
+                Стоит перед Advanced и управляет таймаутом — минуты мощности
+                синхронизируются с полем timeout-min внутри Advanced; ручная
+                правка поля остаётся и действует до сабмита. */}
+            <Field>
+              <PowerSelector
+                value={power}
+                onChange={(next) => {
+                  setPower(next);
+                  setTimeoutMin(String(next.minutes));
+                }}
+              />
             </Field>
 
             {/* 高级参数默认折叠:超时/心跳/首个意图,展开才占空间,常用路径保持清爽。 */}
