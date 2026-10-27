@@ -92,15 +92,57 @@ export function PowerSelector({
   };
 
   const toggleSkill = (name: string, checked: boolean) => {
-    const next = checked
-      ? value.allowedSkills.includes(name)
-        ? value.allowedSkills
-        : [...value.allowedSkills, name]
-      : value.allowedSkills.filter((s) => s !== name);
+    const has = value.allowedSkills.includes(name);
+    if (checked === has) return;
+    const next = checked ? [...value.allowedSkills, name] : value.allowedSkills.filter((s) => s !== name);
     onChange({ ...value, allowedSkills: next });
   };
 
   const selectedCount = value.allowedSkills.length;
+
+  const renderSkillsBody = () => {
+    if (skillsError) {
+      return (
+        <div className="flex flex-col items-start gap-1.5 p-1">
+          <p className="text-destructive text-xs">{t("skillsError")}</p>
+          <Button type="button" variant="outline" size="xs" onClick={() => void loadSkills()}>
+            {t("skillsRetry")}
+          </Button>
+        </div>
+      );
+    }
+    if (skillsLoading) {
+      return (
+        <div className="flex flex-col gap-1.5 p-1">
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-4/5" />
+          <Skeleton className="h-4 w-3/5" />
+        </div>
+      );
+    }
+    if (skills && skills.length === 0) {
+      return <p className="px-1 py-1 text-muted-foreground text-xs">{t("skillsEmpty")}</p>;
+    }
+    return (
+      <div className="flex flex-col gap-0.5">
+        {(skills ?? []).map((name, i) => (
+          <label
+            key={name}
+            htmlFor={`${skillsListId}-${i}`}
+            className="flex cursor-pointer items-start gap-2 rounded px-1 py-0.5 text-sm hover:bg-muted/50"
+          >
+            <Checkbox
+              id={`${skillsListId}-${i}`}
+              checked={value.allowedSkills.includes(name)}
+              onCheckedChange={(v) => toggleSkill(name, !!v)}
+              className="mt-0.5"
+            />
+            <span className="min-w-0 break-all leading-snug">{name}</span>
+          </label>
+        ))}
+      </div>
+    );
+  };
 
   return (
     <div className="grid gap-2">
@@ -145,41 +187,8 @@ export function PowerSelector({
               </Button>
             </PopoverTrigger>
             <PopoverContent align="start" className="max-h-72 w-72 overflow-auto p-2">
-              <p className="text-muted-foreground px-1 pb-1 text-[11px] font-medium">{t("skillsLabel")}</p>
-              {skillsError ? (
-                <div className="flex flex-col items-start gap-1.5 p-1">
-                  <p className="text-destructive text-xs">{t("skillsError")}</p>
-                  <Button type="button" variant="outline" size="xs" onClick={() => void loadSkills()}>
-                    {t("skillsRetry")}
-                  </Button>
-                </div>
-              ) : skillsLoading ? (
-                <div className="flex flex-col gap-1.5 p-1">
-                  <Skeleton className="h-4 w-full" />
-                  <Skeleton className="h-4 w-4/5" />
-                  <Skeleton className="h-4 w-3/5" />
-                </div>
-              ) : skills && skills.length === 0 ? (
-                <p className="text-muted-foreground px-1 py-1 text-xs">{t("skillsEmpty")}</p>
-              ) : (
-                <div className="flex flex-col gap-0.5">
-                  {(skills ?? []).map((name, i) => (
-                    <label
-                      key={name}
-                      htmlFor={`${skillsListId}-${i}`}
-                      className="flex cursor-pointer items-start gap-2 rounded px-1 py-0.5 text-sm hover:bg-muted/50"
-                    >
-                      <Checkbox
-                        id={`${skillsListId}-${i}`}
-                        checked={value.allowedSkills.includes(name)}
-                        onCheckedChange={(v) => toggleSkill(name, !!v)}
-                        className="mt-0.5"
-                      />
-                      <span className="min-w-0 break-all leading-snug">{name}</span>
-                    </label>
-                  ))}
-                </div>
-              )}
+              <p className="px-1 pb-1 font-medium text-[11px] text-muted-foreground">{t("skillsLabel")}</p>
+              {renderSkillsBody()}
             </PopoverContent>
           </Popover>
           <p className="text-muted-foreground text-xs">{t("skillsHint")}</p>

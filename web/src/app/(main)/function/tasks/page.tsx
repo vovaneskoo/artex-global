@@ -46,11 +46,7 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { AssetInterceptRulesEditor } from "@/components/asset-intercept-rules-editor";
-import {
-  DEFAULT_POWER_SELECTION,
-  PowerSelector,
-  type PowerSelection,
-} from "@/components/power-selector";
+import { DEFAULT_POWER_SELECTION, type PowerSelection, PowerSelector } from "@/components/power-selector";
 import { StatusBadge } from "@/components/status-badge";
 import { TablePagination } from "@/components/table-pagination";
 import { TaskLLMProfileChain } from "@/components/task-llm-profile-chain";

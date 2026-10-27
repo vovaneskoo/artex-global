@@ -136,12 +136,12 @@ function CompanyPicker({
                     <span className="min-w-0 flex-1 truncate font-medium">
                       {company?.name ?? t("companyPicker.fallback", { id: companyID })}
                     </span>
-                    <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
+                    <span className="shrink-0 text-muted-foreground text-xs tabular-nums">
                       {t("companyPicker.assetCount", { count: company?.asset_count ?? 0 })}
                     </span>
                   </div>
                   {company && (
-                    <span className="text-muted-foreground truncate text-xs" title={companyScopeSummary(t, company)}>
+                    <span className="truncate text-muted-foreground text-xs" title={companyScopeSummary(t, company)}>
                       {companyScopeSummary(t, company)}
                     </span>
                   )}
@@ -327,7 +327,7 @@ export default function OperatorPage() {
           <CardContent className="pt-0">
             <div className="divide-y">
               {activeMissions.length === 0 ? (
-                <div className="py-4 text-center text-xs text-muted-foreground">{t("noActiveMissions")}</div>
+                <div className="py-4 text-center text-muted-foreground text-xs">{t("noActiveMissions")}</div>
               ) : (
                 activeMissions.map((task) => (
                   <Link
@@ -342,12 +342,12 @@ export default function OperatorPage() {
                       className="mt-0.5 shrink-0 px-1.5 py-0 text-[10px]"
                     />
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-xs font-medium">
+                      <div className="truncate font-medium text-xs">
                         {task.name?.trim() || task.description || task.goal}
                       </div>
                       <div className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">{task.id}</div>
                     </div>
-                    <span className="shrink-0 text-[9px] tabular-nums text-muted-foreground">
+                    <span className="shrink-0 text-[9px] text-muted-foreground tabular-nums">
                       {rel(task.last_activity_unix ?? task.created_unix)}
                     </span>
                   </Link>
@@ -376,7 +376,7 @@ export default function OperatorPage() {
           <CardContent className="pt-0">
             <div className="divide-y">
               {recentFindings.length === 0 ? (
-                <div className="py-4 text-center text-xs text-muted-foreground">{t("noFindings")}</div>
+                <div className="py-4 text-center text-muted-foreground text-xs">{t("noFindings")}</div>
               ) : (
                 recentFindings.map((finding) => (
                   <div key={finding.id} className="flex items-start gap-2 py-2">
@@ -387,16 +387,16 @@ export default function OperatorPage() {
                     />
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="text-[11px] font-semibold">{finding.vulnclass}</span>
+                        <span className="font-semibold text-[11px]">{finding.vulnclass}</span>
                         {finding.task_description && (
                           <span className="truncate text-[10px] text-muted-foreground">{finding.task_description}</span>
                         )}
                       </div>
-                      <div className="mt-0.5 line-clamp-2 text-[10px] leading-snug text-muted-foreground">
+                      <div className="mt-0.5 line-clamp-2 text-[10px] text-muted-foreground leading-snug">
                         {finding.summary}
                       </div>
                     </div>
-                    <span className="shrink-0 text-[9px] tabular-nums text-muted-foreground">{rel(finding.ts)}</span>
+                    <span className="shrink-0 text-[9px] text-muted-foreground tabular-nums">{rel(finding.ts)}</span>
                   </div>
                 ))
               )}

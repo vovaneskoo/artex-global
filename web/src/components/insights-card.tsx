@@ -41,10 +41,11 @@ interface TaskInsights {
 
 function normalizeInsights(body: TaskInsightsResponse): TaskInsights {
   const covUntested = body.coverage?.untested;
+  const untestedSource = Array.isArray(body.untested) ? body.untested : covUntested;
   return {
     coverageEnabled: !!body.coverage?.enabled,
     coveragePct: typeof body.coverage?.pct === "number" ? body.coverage.pct : null,
-    untested: Array.isArray(body.untested) ? body.untested : Array.isArray(covUntested) ? covUntested : [],
+    untested: Array.isArray(untestedSource) ? untestedSource : [],
     suggestions: Array.isArray(body.suggestions)
       ? body.suggestions.filter((s) => typeof s === "string" && s.trim())
       : [],
@@ -142,9 +143,7 @@ export function InsightsCard({ taskId, compact = false }: { taskId: string; comp
               <div className="flex flex-col gap-1.5">
                 <span className="text-muted-foreground text-xs">{t("coverage")}</span>
                 <div className="flex items-center gap-3">
-                  <span
-                    className={`${compact ? "text-lg" : "text-2xl"} font-semibold tabular-nums`}
-                  >
+                  <span className={`${compact ? "text-lg" : "text-2xl"} font-semibold tabular-nums`}>
                     {coveragePct != null ? `${coveragePct}%` : "—"}
                   </span>
                   {coveragePct != null ? <Progress className="flex-1" value={coveragePct} /> : null}
@@ -155,22 +154,22 @@ export function InsightsCard({ taskId, compact = false }: { taskId: string; comp
               <div className="flex flex-col gap-1.5">
                 <span className="text-muted-foreground text-xs">{t("untested")}</span>
                 <div className="flex flex-wrap gap-1.5 text-xs">
-                  {insights.untested.slice(0, UNTESTED_CHIP_LIMIT).map((item, i) => (
-                    <span key={`${i}:${item}`} className="bg-muted break-all rounded px-1.5 py-0.5">
+                  {insights.untested.slice(0, UNTESTED_CHIP_LIMIT).map((item) => (
+                    <span key={item} className="break-all rounded bg-muted px-1.5 py-0.5">
                       {item}
                     </span>
                   ))}
                   {untestedRest > 0 ? (
-                    <span className="text-muted-foreground px-1.5 py-0.5">+{untestedRest}</span>
+                    <span className="px-1.5 py-0.5 text-muted-foreground">+{untestedRest}</span>
                   ) : null}
                 </div>
               </div>
             ) : null}
             <div className="flex flex-col gap-1.5">
               <span className="text-muted-foreground text-xs">{t("suggestions")}</span>
-              <ul className="text-muted-foreground ml-4 list-disc text-sm">
-                {insights.suggestions.map((s, i) => (
-                  <li key={i} className="text-foreground break-words">
+              <ul className="ml-4 list-disc text-muted-foreground text-sm">
+                {insights.suggestions.map((s) => (
+                  <li key={s} className="break-words text-foreground">
                     {s}
                   </li>
                 ))}

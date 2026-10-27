@@ -1220,8 +1220,7 @@ export default function FindingsPage() {
                           ) : null}
                           {(insightTaskOptions ?? []).map((taskOpt) => {
                             const id = String(taskOpt.id);
-                            const label =
-                              taskOpt.name || taskOpt.description || t("task.deletedShort", { id });
+                            const label = taskOpt.name || taskOpt.description || t("task.deletedShort", { id });
                             return (
                               <SelectItem key={id} value={id}>
                                 <span className="block max-w-[20rem] truncate" title={label}>

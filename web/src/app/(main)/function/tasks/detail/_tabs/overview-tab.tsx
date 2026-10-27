@@ -495,9 +495,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                 <div>
                   <div className="text-xs text-muted-foreground">{tBudget("timeout")}</div>
                   <div className="mt-1 text-lg font-semibold tabular-nums">
-                    {timeoutSeconds > 0
-                      ? `${Math.round(timeoutSeconds / 60)} ${tBudget("minutesShort")}`
-                      : "—"}
+                    {timeoutSeconds > 0 ? `${Math.round(timeoutSeconds / 60)} ${tBudget("minutesShort")}` : "—"}
                   </div>
                 </div>
                 <div>
