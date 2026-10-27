@@ -57,6 +57,11 @@ const (
 	errCreateTaskCategoryInvalid = "작업 분류를 찾을 수 없거나 올바르지 않습니다"
 	errCreateTaskCompanyInvalid  = "연결 기업을 찾을 수 없거나 올바르지 않습니다"
 
+	// 스킬 모드(skills_mode) 검증 — 모드 값·custom 전용 목록·목록 길이
+	errCreateTaskSkillsModeInvalid = "스킬 모드가 올바르지 않습니다(비워 두거나 recon·standard·full·custom 중 하나여야 합니다)"
+	errCreateTaskSkillsCustomOnly  = "스킬 목록은 스킬 모드가 custom일 때만 지정할 수 있습니다"
+	errCreateTaskSkillsLimit       = "스킬 목록은 최대 %d개까지 지정할 수 있습니다"
+
 	// LLM 설정 검증 (validateTaskProfileIDs → createTask/updateTaskLLMProfiles writeErr)
 	errLLMProfileInvalid  = "LLM 설정 id가 올바르지 않거나 중복되었습니다"
 	errLLMProfileNotFound = "LLM 설정 #%d를 찾을 수 없거나 API Key가 설정되어 있지 않습니다"
@@ -812,6 +817,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/task-archives/delete/batch", s.deleteTaskArchivesBatch)
 	mux.HandleFunc("GET /api/tasks/{id}/coverage", s.taskCoverage)
 	mux.HandleFunc("GET /api/tasks/{id}/coverage-graph", s.taskCoverageGraph)
+	mux.HandleFunc("GET /api/tasks/{id}/insights", s.taskInsights)
 	mux.HandleFunc("GET /api/tasks/{id}/asset-refs", s.taskAssetRefs)
 	mux.HandleFunc("POST /api/tasks/{id}/assets", s.attachTaskAssets)
 	mux.HandleFunc("DELETE /api/tasks/{id}/assets/{assetID}", s.detachTaskAsset)
@@ -1601,9 +1607,15 @@ type createTaskReq struct {
 	PlanHeartbeatSeconds int      `json:"plan_heartbeat_seconds"`      // planner 心跳触发间隔(秒);0/省略=默认600(10min);下限=默认=600,低于自动抬到600
 	SeedFirstIntent      *bool    `json:"seed_first_intent,omitempty"` // 创建时直接下发一条种子意图(内容=描述+目标),让 worker 免等首轮 planner 直接开跑;省略/null=默认关闭,走标准先规划再执行。显式传 true 才开(CTF 常一 work 解决时可省掉开跑前的 planner 轮)。
 	CoverageEnabled      *bool    `json:"coverage_enabled,omitempty"`  // 资产覆盖度功能;省略/null=默认开(true)。false=关闭覆盖度计算/展示/自动累积范围+隐藏 add_task_scope/list_untested_assets。company 关联不受影响。
+	SkillsMode           string   `json:"skills_mode,omitempty"`       // 任务技能功率模式;省略/''=继承 agent 可见全部技能;recon|standard|full|custom
+	AllowedSkills        []string `json:"allowed_skills,omitempty"`    // custom 模式的技能白名单;trim+去重后上限 64 个,仅 custom 模式可带
 	// InterceptRules 任务级资产拦截/允许规则(创建时录入,存 task_intercept_rules,不进全局表)。
 	InterceptRules []taskInterceptRuleReq `json:"intercept_rules,omitempty"`
 }
+
+// maxTaskAllowedSkills bounds the custom skills-mode whitelist (after trim +
+// dedup) one create-task request may carry. 可见调色板本身有限,64 个足够。
+const maxTaskAllowedSkills = 64
 
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	var req createTaskReq
@@ -1654,12 +1666,37 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errCreateTaskInterceptRules+err.Error())
 		return
 	}
+	// skills_mode/allowed_skills: 白名单只属于 custom;名字在此归一(trim+去重),
+	// db 层还会再归一一次并落库(NULL=空)。个数上限在归一后判定。
+	if !ValidSkillMode(req.SkillsMode) {
+		writeErr(w, 400, errCreateTaskSkillsModeInvalid)
+		return
+	}
+	if len(req.AllowedSkills) > 0 && req.SkillsMode != SkillModeCustom {
+		writeErr(w, 400, errCreateTaskSkillsCustomOnly)
+		return
+	}
+	allowedSkills := make([]string, 0, len(req.AllowedSkills))
+	seenSkills := map[string]bool{}
+	for _, name := range req.AllowedSkills {
+		name = strings.TrimSpace(name)
+		if name == "" || seenSkills[name] {
+			continue
+		}
+		seenSkills[name] = true
+		allowedSkills = append(allowedSkills, name)
+	}
+	if len(allowedSkills) > maxTaskAllowedSkills {
+		writeErr(w, 400, fmt.Sprintf(trMsg(errCreateTaskSkillsLimit), maxTaskAllowedSkills))
+		return
+	}
 	t, err := s.m.CreateTaskWithOptions(req.Description, req.Goal, db.TaskCreateOptions{
 		Name: strings.TrimSpace(req.Name), CategoryID: req.CategoryID,
 		SourceTaskIDs: sourceIDs, CompanyIDs: req.CompanyIDs, LLMProfileIDs: req.LLMProfileIDs,
 		TimeoutSeconds: req.TimeoutSeconds, PlanHeartbeatSeconds: req.PlanHeartbeatSeconds,
 		CoverageEnabled: req.CoverageEnabled,
-		InterceptRules:  interceptRules,
+		SkillsMode:      req.SkillsMode, AllowedSkills: allowedSkills,
+		InterceptRules: interceptRules,
 	})
 	if err != nil {
 		if errors.Is(err, db.ErrTaskCategoryInvalid) || errors.Is(err, db.ErrTaskCategoryNotFound) {

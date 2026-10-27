@@ -524,6 +524,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     timeout_seconds INTEGER NOT NULL DEFAULT 0,
     plan_heartbeat_seconds INTEGER NOT NULL DEFAULT 300,
     coverage_enabled BOOLEAN NOT NULL DEFAULT true,
+    skills_mode   TEXT NOT NULL DEFAULT '',
+    allowed_skills JSONB,
     pinned_at      TIMESTAMPTZ,
     first_run_at   TIMESTAMPTZ,
     deadline_at    TIMESTAMPTZ,
@@ -558,6 +560,10 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMPTZ;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS active_llm_profile_id BIGINT REFERENCES llm_profiles(id) ON DELETE SET NULL;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS llm_chain_revision BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+-- 任务技能功率模式;补旧库。''(默认)=继承 agent 可见全部技能;recon|standard|full|custom。
+-- custom 时 allowed_skills(JSONB 字符串数组,元素=技能名)生效;空名单存 NULL=无技能。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS skills_mode TEXT NOT NULL DEFAULT '';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS allowed_skills JSONB;
 CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks(category_id, created_at DESC)
     WHERE deleted_at IS NULL AND category_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tasks_pinned ON tasks(pinned_at DESC)

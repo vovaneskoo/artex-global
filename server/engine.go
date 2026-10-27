@@ -167,6 +167,12 @@ type Engine struct {
 	// readiness reports whether a global LLM provider is configured — the signal behind
 	// Ready()/the llm_configured indicator. Wired once at startup; nil → not ready.
 	readiness func() bool
+
+	// insights: кэш готовых ответов «что дальше» (60s TTL), см. insights.go —
+	// общий для HTTP-эндпоинта и терминальной автогенерации, чтобы двойной выстрел
+	// (timeout-путь + planner-met) не дублировал LLM-вызов и activity.
+	insightsMu    sync.Mutex
+	insightsCache map[int64]insightsCacheEntry
 }
 
 type taskRuntime struct {
@@ -406,7 +412,7 @@ func NewEngine(m *Manager) *Engine {
 	return &Engine{m: m, debounce: 800 * time.Millisecond, bc: NewBroadcaster(),
 		execCancel: map[string]context.CancelCauseFunc{}, execCtx: map[string]context.Context{},
 		work: map[int64]*workExecution{}, steerBox: map[int64][]string{},
-		runtimes: map[string]*taskRuntime{}}
+		runtimes: map[string]*taskRuntime{}, insightsCache: map[int64]insightsCacheEntry{}}
 }
 
 // registerWork records the cancel for the work currently running intentID.
@@ -922,6 +928,9 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 			// 所有目标达成 → 持久化任务状态为 done（前端 DTO 会优先展示该终态）。
 			if err := e.m.SetTaskStatus(t.ID, "done"); err != nil {
 				log.Printf("[planner] task %s 标记完成落库失败: %v", t.ID, err)
+			} else {
+				// 终态 → 后台自动生成「下一步」洞察(异步不阻塞规划轮;详见 insights.go)
+				e.generateTerminalInsights(t, "done")
 			}
 			// 任务已判完成 → 立刻取消在跑的 worker：它们手头的意图跑出来也没意义了。
 			// 下一轮 worker 循环撞终态门就不再领新意图;被取消的这批走下方"任务已完成"分支

@@ -55,16 +55,20 @@ type Task struct {
 	CompanyIDs         []int64 `json:"company_ids,omitempty"`
 	Status             string  `json:"status"` // persisted lifecycle status (done/failed/timeout 为终态；空/其它则由运行态推导)
 	// 任务级超时(见 docs/任务级超时与收尾设计.md)。DeadlineAt/FirstRunAt 为 unix 秒,0=未设/未运行。
-	TimeoutSeconds       int                    `json:"timeout_seconds"`
-	PlanHeartbeatSeconds int                    `json:"plan_heartbeat_seconds"` // planner 心跳触发间隔(秒)
-	CoverageEnabled      bool                   `json:"coverage_enabled"`       // 资产覆盖度功能开关(创建时定,默认开)
-	FirstRunAt           int64                  `json:"first_run_at,omitempty"`
-	DeadlineAt           int64                  `json:"deadline_at,omitempty"`
-	Store                *pgdb.ExplorationStore `json:"-"`
-	Guard                *guard.Guard           `json:"-"`
-	notify               chan struct{}
-	lifecycleMu          sync.RWMutex
-	llmMu                sync.RWMutex
+	TimeoutSeconds       int  `json:"timeout_seconds"`
+	PlanHeartbeatSeconds int  `json:"plan_heartbeat_seconds"` // planner 心跳触发间隔(秒)
+	CoverageEnabled      bool `json:"coverage_enabled"`       // 资产覆盖度功能开关(创建时定,默认开)
+	// SkillsMode/AllowedSkills 任务技能功率模式与 custom 白名单,创建时定、运行期不可变
+	// (同 CoverageEnabled):任务的 preset 再切一刀 agent 可见技能调色板。见 server/skills_mode.go。
+	SkillsMode    string                 `json:"skills_mode"`              // ''=继承全部;recon|standard|full|custom
+	AllowedSkills []string               `json:"allowed_skills,omitempty"` // custom 模式技能白名单;nil=未设置
+	FirstRunAt    int64                  `json:"first_run_at,omitempty"`
+	DeadlineAt    int64                  `json:"deadline_at,omitempty"`
+	Store         *pgdb.ExplorationStore `json:"-"`
+	Guard         *guard.Guard           `json:"-"`
+	notify        chan struct{}
+	lifecycleMu   sync.RWMutex
+	llmMu         sync.RWMutex
 
 	// pendingTriggers accumulates the concrete changes (worker done / finding) that
 	// fired planning rounds since the last one consumed them. The debounce coalesces
@@ -865,7 +869,8 @@ func taskFromPG(pt *pgdb.Task, store *pgdb.ExplorationStore, ic *intercept.Inter
 		CompanyIDs:     append([]int64(nil), pt.CompanyIDs...),
 		TimeoutSeconds: pt.TimeoutSeconds, PlanHeartbeatSeconds: pt.PlanHeartbeatSeconds,
 		CoverageEnabled: pt.CoverageEnabled,
-		FirstRunAt:      unixOrZero(pt.FirstRunAt), DeadlineAt: unixOrZero(pt.DeadlineAt),
+		SkillsMode:      pt.SkillsMode, AllowedSkills: append([]string(nil), pt.AllowedSkills...),
+		FirstRunAt: unixOrZero(pt.FirstRunAt), DeadlineAt: unixOrZero(pt.DeadlineAt),
 		Store: store, Guard: g, notify: make(chan struct{}, 1),
 	}
 }

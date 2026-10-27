@@ -221,6 +221,8 @@ func (e *Engine) settleTask(ctx context.Context, t *Task) {
 		log.Printf("[deadline] task %s 落终态失败: %v", t.ID, err)
 	case won:
 		log.Printf("[deadline] task %s 收尾完成,终态=%s", t.ID, status)
+		// 终态落定 → 后台自动生成「下一步」洞察(异步不阻塞收尾;详见 insights.go)
+		e.generateTerminalInsights(t, status)
 	default:
 		log.Printf("[deadline] task %s 收尾时已是终态,保留原状态", t.ID)
 	}
