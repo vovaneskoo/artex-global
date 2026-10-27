@@ -33,7 +33,7 @@ const insightsWorkerLane = "insights"
 const (
 	insightsCacheTTL        = 60 * time.Second // готовый ответ живёт минуту: двойной выстрел терминала не дублирует LLM-вызов
 	insightsGenerateTimeout = 60 * time.Second // бюджет и фонового хука, и HTTP-запроса
-	insightsMaxTokens       = 1200
+	insightsMaxTokens       = 4000 // thinking-модели сжигают бюджет на рассуждения: 1200 давало пустой content
 	insightsUntestedLimit   = 10
 )
 
@@ -198,7 +198,8 @@ func insightsCompletion(ctx context.Context, prov llm.Provider, system, user str
 		Messages:    []llm.Message{llm.UserText(user)},
 		MaxTokens:   insightsMaxTokens,
 		Temperature: &temp,
-		Thinking:    "disabled",
+		// Thinking НЕ выставляем: openai-совместимые провайдеры (Venice) режут
+		// запрос 400 «Unrecognized key: thinking» на этом поле.
 	}
 	var sb strings.Builder
 	for ev, err := range prov.Stream(ctx, req) {
@@ -329,6 +330,12 @@ func generateInsights(ctx context.Context, e *Engine, t *Task, status string, re
 	// отдельно от worker/planner (как judge-расход у intercept).
 	llmCtx := llmrec.WithWorker(ctx, insightsWorkerLane)
 	text, err := insightsCompletion(llmCtx, prov, insightsSystemPrompt, string(user))
+	if err == nil {
+		// thinking-модель иногда отдаёт пустой content: один ретрай
+		if strings.TrimSpace(text) == "" {
+			text, err = insightsCompletion(llmCtx, prov, insightsSystemPrompt, string(user))
+		}
+	}
 	if err != nil {
 		resp.Error = err.Error()
 		store()
