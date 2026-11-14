@@ -202,6 +202,18 @@ const del = <T>(p: string, body?: unknown) =>
 const arr = <T>(x: T[] | null | undefined): T[] => x ?? [];
 const tq = (task?: string, sep: "?" | "&" = "?") => (task ? `${sep}task=${encodeURIComponent(task)}` : "");
 
+// reportQuery builds the /api/report query string: the task selector plus the
+// report locale (?lang=) and, for downloadReport, the attachment flag.
+// Exported for the unit test pinning the params the server handler reads.
+export const reportQuery = (task?: string, locale?: string, download = false) => {
+  const params = new URLSearchParams();
+  if (locale) params.set("lang", locale);
+  if (download) params.set("download", "1");
+  const qs = params.toString();
+  if (!qs) return tq(task);
+  return `${tq(task)}${task ? "&" : "?"}${qs}`;
+};
+
 // findingFilterParams 把发现页的筛选条件序列化成 query string。列表 / 分组 /
 // 资产树 / 导出共用同一份,新增筛选项只改这里(后端也只解析这一份)。
 function findingFilterParams(q: Omit<FindingQuery, "page" | "pageSize">): URLSearchParams {
@@ -859,14 +871,40 @@ export const api = {
     ).then((r) => ({ ...r, deliveries: arr(r.deliveries) }));
   },
   notifyRetryDelivery: (id: number) => post<{ ok: boolean }>(`/notify/deliveries/${id}/retry`),
-  report: async (task?: string) => {
+  // task report (markdown deliverable). locale is the UI display language —
+  // the server renders the report skeleton in it (en/ru/ko; anything else
+  // falls back to English server-side). report() and downloadReport() hit the
+  // same endpoint with the same task+lang params, so the rendered tab, the
+  // copied text and the downloaded file carry the same content.
+  report: async (task?: string, locale?: string) => {
     if (MOCK) return mockReport(task);
     const token = getToken();
-    const r = await fetch(`/api/report${tq(task)}`, {
+    const r = await fetch(`/api/report${reportQuery(task, locale)}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!r.ok) throw new Error(`report: ${r.status}`);
     return r.text();
+  },
+  downloadReport: async (task?: string, locale?: string) => {
+    if (MOCK) return;
+    const token = getToken();
+    const query = reportQuery(task, locale, true);
+    const r = await fetch(`/api/report${query}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!r.ok) throw new Error(`report download: ${r.status}`);
+    const blob = await r.blob();
+    const disp = r.headers.get("Content-Disposition") ?? "";
+    const m = disp.match(/filename="?([^"]+)"?/);
+    const filename = m?.[1] ?? `report-task-${task ?? "active"}.md`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   },
   chatMentions: (kind: string, query: string, signal?: AbortSignal, cursor = "") =>
     http<{ items: ChatMention[]; next_cursor?: string }>(

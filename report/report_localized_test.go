@@ -71,6 +71,7 @@ func TestReportMarkdownLocalized(t *testing.T) {
 		Title:       "데모 작업",
 		Goal:        "샌드박스 전수 점검",
 		GeneratedAt: time.Date(2026, 10, 4, 2, 30, 0, 0, time.UTC),
+		Locale:      "ko",
 		AssetCounts: map[string]int{"host": 2, "url": 5},
 		Findings:    []*db.Node{sampleFindingNode(t)},
 	})
@@ -83,8 +84,8 @@ func TestReportMarkdownLocalized(t *testing.T) {
 		"- **생성 시각**:",
 		"## 요약",
 		"- 확인된 취약점: **1**건",
-		"## 취약점",
-		"**PoC / 증거:**",
+		"## 확인된 취약점",
+		"증거 참조:",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("보고서 골격에 %q 가 없다", want)
@@ -92,14 +93,18 @@ func TestReportMarkdownLocalized(t *testing.T) {
 	}
 }
 
-// TestReportMarkdownEmptyLocalized 는 취약점이 없을 때의 안내 문구가 한국어임을 검증한다.
+// TestReportMarkdownEmptyLocalized 는 취약점이 없을 때의 안내 문구가 한국어이고,
+// '점검하지 않았다'가 아니라 '확정된 취약점이 없을 뿐, 안전의 증거는 아님'을 말하는지 검증한다.
 func TestReportMarkdownEmptyLocalized(t *testing.T) {
-	out := Markdown(Input{Title: "빈 작업", GeneratedAt: time.Now()})
+	out := Markdown(Input{Title: "빈 작업", GeneratedAt: time.Now(), Locale: "ko"})
 	if r, ok := containsHan(out); ok {
 		t.Fatalf("빈 보고서에 중국어 한자 %q 가 남아 있다:\n%s", string(r), out)
 	}
-	if !strings.Contains(out, "_이번에 확인된 취약점이 없습니다._") {
+	if !strings.Contains(out, "확정된 취약점은 기록되지 않았습니다") {
 		t.Errorf("빈 보고서 안내 문구가 한국어가 아니다:\n%s", out)
+	}
+	if !strings.Contains(out, "안전하다는 증거가 아닙니다") {
+		t.Errorf("빈 보고서가 안전 증명처럼 읽힌다:\n%s", out)
 	}
 }
 

@@ -4066,25 +4066,89 @@ func (s *Server) fallbackChat(t *Task, msg string) string {
 	}
 }
 
+// getReport renders the task's deliverable report (markdown). Everything in it
+// is task-scoped: findings and facts come from the task's own exploration
+// store, asset counts from AssetStore.CountsByTypeForTask — the old handler
+// used the global QueryByType, which mixed every project's assets into the
+// report. Evidence appears as references (finding row id + triage status +
+// traffic binding count from DB.FindingMetaByNodeID, itself task_id-scoped),
+// never as raw captures. The skeleton locale follows ?lang= (en/ru/ko,
+// anything else falls back to English); without ?lang= it uses the server's
+// active output language. An empty task is a valid report: HTTP 200 with the
+// zero-findings honesty line, not an error.
 func (s *Server) getReport(w http.ResponseWriter, r *http.Request) {
-	t := s.m.ResolveTask(r.URL.Query().Get("task"))
+	q := r.URL.Query()
+	t := s.m.ResolveTask(q.Get("task"))
 	if t == nil {
 		writeErr(w, 404, "no active task")
 		return
 	}
-	findings, _ := t.Store.ListByKind(db.KindFinding, 1000) // 纯漏洞（事实是独立的 KindFact，不进报告）
-	counts := map[string]int{}
-	for _, ty := range []string{"root_domain", "ip", "subdomain", "app", "service", "endpoint"} {
-		ns, _ := s.m.Assets().QueryByType(ty, 100000, 0)
-		if len(ns) > 0 {
-			counts[ty] = len(ns)
+	taskID, err := strconv.ParseInt(t.ID, 10, 64)
+	if err != nil {
+		writeErr(w, 500, "bad task id: "+t.ID)
+		return
+	}
+	findings, err := t.Store.ListByKind(db.KindFinding, 1000) // 纯漏洞（事实是独立的 KindFact，另节呈现）
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	facts, err := t.Store.ListByKind(db.KindFact, 1000)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	counts, err := s.m.Assets().CountsByTypeForTask(taskID)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	// Evidence references, task-owned only: FindingMetaByNodeID selects
+	// findings WHERE task_id = this task, so another task's evidence rows can
+	// never be grafted onto this report. A meta failure degrades to "no
+	// evidence reference" lines (same tolerance as the findings page), it does
+	// not fail the report.
+	refs := map[int64]report.FindingRef{}
+	if meta, metaErr := s.m.pg.FindingMetaByNodeID(taskID); metaErr != nil {
+		log.Printf("[report] task=%s finding meta: %v", t.ID, metaErr)
+	} else {
+		for nodeID, m := range meta {
+			refs[nodeID] = report.FindingRef{FindingID: m.ID, Status: m.Status, Traffic: m.TrafficCount}
 		}
+	}
+	lifecycle := t.lifecycleSnapshot()
+	var createdAt, completedAt time.Time
+	if t.CreatedAt > 0 {
+		createdAt = time.Unix(t.CreatedAt, 0)
+	}
+	if lifecycle.CompletedAt > 0 {
+		completedAt = time.Unix(lifecycle.CompletedAt, 0)
+	}
+	// An explicit ?lang= wins as-is (the report package falls back to English
+	// for unsupported codes); only an absent ?lang= means "use the server's
+	// active output language".
+	locale := strings.TrimSpace(q.Get("lang"))
+	if locale == "" {
+		locale = s.outputLanguage()
 	}
 	md := report.Markdown(report.Input{
 		Title: t.Description, Goal: t.Goal, GeneratedAt: time.Now(),
-		AssetCounts: counts, Findings: findings,
+		Locale: locale,
+		TaskID:        t.ID,
+		ExplorationID: t.ExpID,
+		Status:        s.resolvedTaskStatus(t),
+		CreatedAt:     createdAt,
+		CompletedAt:   completedAt,
+		SourceTaskIDs: lifecycle.SourceTaskIDs,
+		AssetCounts:   counts,
+		Facts:         facts,
+		Findings:      findings,
+		FindingRefs:   refs,
 	})
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	if q.Get("download") == "1" {
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="report-task-%s-%s.md"`, t.ID, time.Now().Format("20060102-150405")))
+	}
 	w.WriteHeader(200)
 	_, _ = w.Write([]byte(md))
 }

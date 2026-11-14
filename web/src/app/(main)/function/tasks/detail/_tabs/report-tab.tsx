@@ -2,13 +2,14 @@
 
 import * as React from "react";
 
-import { CheckIcon, CopyIcon, FileTextIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, DownloadIcon, FileTextIcon } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { Markdown } from "@/components/markdown";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useActiveLocale } from "@/i18n/locale-store";
 import { api } from "@/lib/api";
 import { copyText } from "@/lib/utils";
 
@@ -21,17 +22,21 @@ type ReportState = { status: "loading" | "error" } | { status: "ready"; text: st
 
 function TaskReport({ taskId }: { taskId: string }) {
   const t = useTranslations("taskDetail.report");
+  const wt = useTranslations("workspace");
+  const locale = useActiveLocale();
   const [state, setState] = React.useState<ReportState>({ status: "loading" });
   const [attempt, setAttempt] = React.useState(0);
   const [copied, setCopied] = React.useState(false);
   const report = state.status === "ready" ? state.text : "";
 
+  // The report skeleton follows the UI locale (?lang=), so a locale switch
+  // refetches — the rendered, copied and downloaded report stay consistent.
   // biome-ignore lint/correctness/useExhaustiveDependencies: attempt intentionally restarts the request after an explicit retry.
   React.useEffect(() => {
     let active = true;
     setState({ status: "loading" });
     api
-      .report(taskId)
+      .report(taskId, locale)
       .then((text) => {
         if (active) setState({ status: "ready", text });
       })
@@ -41,7 +46,7 @@ function TaskReport({ taskId }: { taskId: string }) {
     return () => {
       active = false;
     };
-  }, [taskId, attempt]);
+  }, [taskId, attempt, locale]);
 
   function retry() {
     setState({ status: "loading" });
@@ -57,6 +62,14 @@ function TaskReport({ taskId }: { taskId: string }) {
       setTimeout(() => setCopied(false), 1500);
     } else {
       toast.error(t("copyError"));
+    }
+  }
+
+  async function download() {
+    try {
+      await api.downloadReport(taskId, locale);
+    } catch (error) {
+      toast.error(wt("downloadFailed", { msg: error instanceof Error ? error.message : "" }));
     }
   }
 
@@ -106,9 +119,14 @@ function TaskReport({ taskId }: { taskId: string }) {
         </CardTitle>
         <div className="flex gap-2">
           {report && (
-            <Button size="sm" variant="outline" onClick={copy}>
-              {copied ? <CheckIcon /> : <CopyIcon />} {t("copy")}
-            </Button>
+            <>
+              <Button size="sm" variant="outline" onClick={download}>
+                <DownloadIcon /> {wt("download")}
+              </Button>
+              <Button size="sm" variant="outline" onClick={copy}>
+                {copied ? <CheckIcon /> : <CopyIcon />} {t("copy")}
+              </Button>
+            </>
           )}
         </div>
       </CardHeader>
