@@ -366,7 +366,15 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	if abs, err := filepath.Abs(dir); err == nil {
 		dir = abs
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	// Everything under the data root is service-private (raw LLM transcripts,
+	// uploaded files, the traffic tree). Tighten the root and the transcript
+	// store to owner-only on every start; the traffic tree migrates itself in
+	// traffic.Open. Bytes and ownership are untouched — chmod only. See
+	// docs/privacy-map.md.
+	if err := secureLocalData(dir); err != nil {
 		return nil, err
 	}
 	dsn, source, err := pgdb.DSN()

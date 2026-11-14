@@ -90,7 +90,7 @@ func (s *Server) chatUpload(w http.ResponseWriter, r *http.Request) {
 		defer s.engine.decInflight(id)
 	}
 	dir := filepath.Join(s.m.dir, sub, id, "uploads")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		writeErr(w, 500, errChatUploadMkdir+err.Error())
 		return
 	}

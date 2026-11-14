@@ -173,11 +173,21 @@ type Traffic struct {
 }
 
 // Open initializes the traffic tree, blob store and SQLite index under dir.
+//
+// Everything under dir is service-private by design: captured request/response
+// bodies (spilled to _blobs), the SQLite index that mirrors them, and the MITM
+// CA private key in _ca. Directories are therefore created 0700 and existing
+// trees are migrated on every start (MigratePermissions), so an install laid
+// out by an older build with 0755/0644 is tightened without touching bytes.
+// See docs/privacy-map.md.
 func Open(dir, addr string) (*Traffic, error) {
 	for _, d := range []string{dir, filepath.Join(dir, "_index"), filepath.Join(dir, "_blobs"), filepath.Join(dir, "_ca")} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
+		if err := os.MkdirAll(d, 0o700); err != nil {
 			return nil, err
 		}
+	}
+	if err := MigratePermissions(dir); err != nil {
+		return nil, err
 	}
 	// busy_timeout is a per-connection setting, so it belongs in the DSN rather
 	// than in a one-off Exec: the pool opens connections on demand, and an Exec
@@ -200,6 +210,12 @@ func Open(dir, addr string) (*Traffic, error) {
 		db.Close()
 		return nil, err
 	}
+	// initIndex's schema writes make SQLite create index.sqlite-wal/-shm with the
+	// process umask (typically 0644). The driver exposes no creation-mode knob, so
+	// tighten them right after; the 0700 _index directory is the durable boundary,
+	// this brings the file modes themselves to 0600. WAL/SHM hold captured body
+	// fragments, so they are as sensitive as the main database file.
+	secureSQLiteFiles(filepath.Join(dir, "_index", "index.sqlite"))
 
 	p, err := mproxy.NewProxy(&mproxy.Options{
 		Addr:        addr,
@@ -207,6 +223,15 @@ func Open(dir, addr string) (*Traffic, error) {
 		CaRootPath:  filepath.Join(dir, "_ca"),
 	})
 	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	// NewProxy generates the MITM CA on first run and writes it with os.Create
+	// (0644 by umask) — including mitmproxy-ca.pem, the CA PRIVATE key. It runs
+	// after the MigratePermissions pass above, so tighten _ca again here.
+	// Regenerating the CA would break installed trust, so this must never
+	// delete or replace the files — chmod only.
+	if err := MigratePermissions(filepath.Join(dir, "_ca")); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -543,13 +568,13 @@ func (t *Traffic) spill(body []byte, contentType string) storedBody {
 	// One bucket level (256 buckets) is enough to keep any single directory small;
 	// the store only ever holds bodies above maxInlineBody, deduplicated by hash.
 	blobDir := filepath.Join(t.dir, "_blobs", "sha256", h[:2])
-	if err := os.MkdirAll(blobDir, 0o755); err != nil {
+	if err := os.MkdirAll(blobDir, 0o700); err != nil {
 		log.Printf("[traffic] 创建 blob 目录失败：%v", err)
 		return storedBody{inline: clipBytes(body, blobPreview), index: indexText()}
 	}
 	blobPath := filepath.Join(blobDir, h+".bin")
 	if _, err := os.Stat(blobPath); os.IsNotExist(err) {
-		if err := os.WriteFile(blobPath, body, 0o644); err != nil {
+		if err := os.WriteFile(blobPath, body, 0o600); err != nil {
 			log.Printf("[traffic] 写 blob %s 失败：%v", h, err)
 			return storedBody{inline: clipBytes(body, blobPreview), index: indexText()}
 		}
