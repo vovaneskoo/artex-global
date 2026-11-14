@@ -13,7 +13,9 @@ func TestTaskCategoryCRUDAndTaskAssignment(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) - skipping", err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	name := fmt.Sprintf("Category %d", time.Now().UnixNano())
 	category, err := d.CreateTaskCategory("  " + strings.ReplaceAll(name, " ", "   ") + "  ")
@@ -74,7 +76,9 @@ func TestCreateTaskRejectsMissingCategoryAtomically(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) - skipping", err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	missing := int64(1 << 62)
 	description := fmt.Sprintf("missing-category-%d", time.Now().UnixNano())
@@ -95,7 +99,9 @@ func TestSetTasksCategoryBatch(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) - skipping", err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	stamp := time.Now().UnixNano()
 	category, err := d.CreateTaskCategory(fmt.Sprintf("Batch %d", stamp))
@@ -152,7 +158,9 @@ func TestSetTasksCategoryRejectsBadInputAtomically(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) - skipping", err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	stamp := time.Now().UnixNano()
 	task, err := d.CreateTaskWithOptions(fmt.Sprintf("batch-reject-%d", stamp), "goal", TaskCreateOptions{})

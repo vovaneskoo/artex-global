@@ -13,7 +13,9 @@ func TestTaskLifecycleAndDeleteCascade(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	tk, err := d.CreateTask("迁移测试", "目标X", nil, 0, 0)
 	if err != nil {
@@ -87,7 +89,9 @@ func TestTaskDeleteCascadeAssets(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	first, err := d.CreateTask("级联删除测试", "目标A", nil, 0, 0)
 	if err != nil {
@@ -211,7 +215,9 @@ func TestTaskRelationsAndLLMFailoverChain(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) - skipping", err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	suffix := time.Now().UnixNano()
 	profileIDs := make([]int64, 0, 3)
@@ -469,7 +475,9 @@ func TestTaskContextRejectsDuplicatesAndAllowsTerminalLLMEdits(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) - skipping", err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	source, err := d.CreateTask("source", "goal", nil, 0, 0)
 	if err != nil {
@@ -522,7 +530,9 @@ func TestCreateTaskWithCompanyScopes(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) - skipping", err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	suffix := time.Now().UnixNano()
 	companyA, _, err := d.Companies().UpsertCompany(fmt.Sprintf("Task Company A %d", suffix), "")
@@ -673,7 +683,9 @@ func TestListTasksOrderByIDDesc(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	stamp := time.Now().UnixNano()
 	var ids []int64

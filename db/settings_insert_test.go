@@ -15,7 +15,9 @@ func TestInsertSettingIfAbsentDoesNotOverwrite(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	// 테스트 전용 키를 써서 개발 데이터베이스의 실제 auth.password_hash 는 건드리지 않는다.
 	key := fmt.Sprintf("test.insert_if_absent.%d", time.Now().UnixNano())

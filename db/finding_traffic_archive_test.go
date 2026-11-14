@@ -19,7 +19,9 @@ func TestFindingTrafficLegacyArchiveDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 	if err = d.EnsureLLMRecordsTable(); err != nil {
 		t.Fatal(err)
 	}

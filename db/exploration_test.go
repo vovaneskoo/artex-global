@@ -10,7 +10,9 @@ func TestExplorationFlow(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	expID, err := d.CreateExploration("test", "拿下测试目标")
 	if err != nil {
@@ -121,7 +123,9 @@ func TestIntentPauseResumeAndCancelCleanup(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	expID, err := d.CreateExploration("test", "worker control cleanup")
 	if err != nil {
@@ -254,7 +258,9 @@ func TestNodesPageQueryMatchesID(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	expID, err := d.CreateExploration("test", "id 搜索")
 	if err != nil {

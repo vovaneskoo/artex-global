@@ -8,6 +8,7 @@ import (
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/guard"
 	"github.com/Autumn-27/artex/intercept"
+	"github.com/Autumn-27/artex/testutil"
 	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/llm"
 	"github.com/Autumn-27/norma/permission"
@@ -26,6 +27,9 @@ func TestCaptureApprovalLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
+	// The judge config lives in the shared settings table; keep the fixture
+	// state this test found regardless of test order.
+	testutil.PreserveTable(t, d.DB, "settings")
 	ic := intercept.New(d)
 	priorTools, err := ic.GetEnabledTools()
 	if err != nil {
@@ -36,22 +40,31 @@ func TestCaptureApprovalLifecycle(t *testing.T) {
 	if err := ic.SetEnabledTools([]string{"ApprovalAuditProbe"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ic.SetJudgeConfig(intercept.JudgeConfig{Enabled: true, AskTimeoutSeconds: 1, AskTimeoutAction: "allow"}); err != nil {
-		t.Fatal(err)
-	}
 
+	// failAction mirrors the llm_judge_fail_action setting: "" leaves it unset,
+	// which must fail CLOSED (deny) — the current default — when the model
+	// replies unparseably. Only an explicitly chosen "allow" lets such a call
+	// through, pinned by the model_fallback_allow case.
 	for _, tc := range []struct {
-		name, action, status, execution string
-		manual, approve, toolError      bool
+		name, action, status, execution, failAction string
+		manual, approve, toolError                  bool
 	}{
-		{"model_fallback", "invalid", "allowed", "succeeded", false, false, false},
-		{"model_allow", "allow", "allowed", "succeeded", false, false, false},
-		{"model_deny", "deny", "denied", "not_executed", false, false, false},
-		{"human_allow_tool_error", "ask", "allowed", "failed", true, true, true},
-		{"human_deny", "ask", "denied", "not_executed", true, false, false},
-		{"timeout_allow", "ask", "timeout", "succeeded", false, false, false},
+		{"model_fallback", "invalid", "denied", "not_executed", "", false, false, false},
+		{"model_fallback_allow", "invalid", "allowed", "succeeded", "allow", false, false, false},
+		{"model_allow", "allow", "allowed", "succeeded", "", false, false, false},
+		{"model_deny", "deny", "denied", "not_executed", "", false, false, false},
+		{"human_allow_tool_error", "ask", "allowed", "failed", "", true, true, true},
+		{"human_deny", "ask", "denied", "not_executed", "", true, false, false},
+		{"timeout_allow", "ask", "timeout", "succeeded", "", false, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			judge := intercept.JudgeConfig{Enabled: true, AskTimeoutSeconds: 1, AskTimeoutAction: "allow"}
+			if tc.failAction != "" {
+				judge.FailAction = tc.failAction
+			}
+			if err := ic.SetJudgeConfig(judge); err != nil {
+				t.Fatal(err)
+			}
 			ic.SetReviewer(func(context.Context, int64, string, intercept.ReviewInput) (intercept.Decision, error) {
 				return intercept.Decision{Action: tc.action, Message: "probe review", ProfileID: 7}, nil
 			})
@@ -114,7 +127,12 @@ func TestCaptureApprovalLifecycle(t *testing.T) {
 			a := detail.Audit
 			initialAction := tc.action
 			if tc.action == "invalid" {
-				initialAction = "allow"
+				// Unparseable model output resolves through the failure policy:
+				// deny unless fail_action was explicitly set to allow.
+				initialAction = "deny"
+				if tc.failAction == "allow" {
+					initialAction = "allow"
+				}
 			}
 			wantUserMessage := "record this review"
 			if initialAction == "allow" {

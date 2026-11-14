@@ -75,6 +75,7 @@ func TestGetReportTaskScoped(t *testing.T) {
 	}
 	defer m.Close()
 	s := New(context.Background(), m, t.TempDir(), t.TempDir(), t.TempDir())
+	defer s.Close()
 
 	taskA, _, findingA := reportTaskFixture(t, m, "alpha")
 	taskB, _, findingB := reportTaskFixture(t, m, "beta")
@@ -137,6 +138,7 @@ func TestGetReportLocalized(t *testing.T) {
 	}
 	defer m.Close()
 	s := New(context.Background(), m, t.TempDir(), t.TempDir(), t.TempDir())
+	defer s.Close()
 	// Pin the settings-table language away and restore it after (same contract
 	// as output_language_test.go), so the no-lang case resolves deterministically
 	// to ARTEX_LANG=ko pinned by TestMain.
@@ -195,6 +197,7 @@ func TestGetReportEmptyTask(t *testing.T) {
 	}
 	defer m.Close()
 	s := New(context.Background(), m, t.TempDir(), t.TempDir(), t.TempDir())
+	defer s.Close()
 	task, err := m.CreateTask("report empty task", "", nil, 0, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -227,6 +230,7 @@ func TestGetReportDownloadAndMissing(t *testing.T) {
 	}
 	defer m.Close()
 	s := New(context.Background(), m, t.TempDir(), t.TempDir(), t.TempDir())
+	defer s.Close()
 	task, _, _ := reportTaskFixture(t, m, "dl")
 
 	code, header, body := fetchReport(t, s, "?task="+task.ID+"&lang=en&download=1")
@@ -254,6 +258,7 @@ func TestGetReportDatabaseFailureIsHTTP500(t *testing.T) {
 	}
 	defer m.Close()
 	s := New(context.Background(), m, t.TempDir(), t.TempDir(), t.TempDir())
+	defer s.Close()
 	task, err := m.CreateTask("report dead db", "", nil, 0, 0)
 	if err != nil {
 		t.Fatal(err)

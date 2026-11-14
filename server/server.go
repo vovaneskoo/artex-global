@@ -119,6 +119,9 @@ type Server struct {
 	m      *Manager
 	engine *Engine
 	ctx    context.Context
+	// cancel stops ctx (a child of the caller's context) in Close, draining the
+	// background workers New started (task-archive worker, engine task loops).
+	cancel context.CancelFunc
 
 	skillDir string // root directory for skill subdirectories
 	jwtKey   []byte // HS256 signing key loaded from / generated into dataDir/jwt.key
@@ -237,7 +240,11 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	if err != nil {
 		log.Fatalf("[auth] JWT key: %v", err)
 	}
-	s := &Server{m: m, engine: NewEngine(m), ctx: ctx, skillDir: skillDir, jwtKey: key, chatBusy: map[string]bool{},
+	// Derive a cancellable child so Close can stop the background workers New
+	// starts (task-archive worker, engine task loops) even when the caller
+	// handed us a context.Background() — which every test does.
+	ctx, cancel := context.WithCancel(ctx)
+	s := &Server{m: m, engine: NewEngine(m), ctx: ctx, cancel: cancel, skillDir: skillDir, jwtKey: key, chatBusy: map[string]bool{},
 		chatCancel: map[string]context.CancelCauseFunc{}, triggerQ: map[string][]triggeredRun{},
 		triggerActive: map[string]int{}, triggerCfg: map[string]triggerBehavior{},
 		profChatAgents: map[int64]*agent.ChatAgent{},
@@ -374,6 +381,35 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	s.startTaskArchiveWorker()
 	s.wireInterceptReviewer() // LLM 兜底审批:未命中拦截规则的命令交给模型判定
 	return s
+}
+
+// Close cancels the server-wide context and drains the background workers New
+// started: the task-archive worker (joined via archiveWG) and, through ctx, the
+// engine's per-task planner/worker loops and deadline coordinators.
+//
+// Tests MUST call it (t.Cleanup(s.Close)) before closing the Manager — the
+// workers otherwise outlive the test, keep polling a closed database ("sql:
+// database is closed" spam) and can write into the test's temp dir while the
+// testing framework is already removing it ("TempDir RemoveAll cleanup:
+// directory not empty"). Production does not call Close today; its shutdown is
+// process exit, and the derived context makes that path bit-identical.
+func (s *Server) Close() {
+	if s == nil {
+		return
+	}
+	if s.cancel != nil {
+		s.cancel()
+	}
+	done := make(chan struct{})
+	go func() {
+		s.archiveWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		log.Printf("[server] Close: task-archive worker did not drain within 10s")
+	}
 }
 
 // Restored deadline and worker loops must inherit the same context as new tasks,

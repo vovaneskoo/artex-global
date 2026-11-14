@@ -133,6 +133,7 @@ func TestGuardMediaCheckRunsBeforeHandler(t *testing.T) {
 		t.Skipf("manager unavailable (%v)", err)
 	}
 	s := New(context.Background(), m, t.TempDir(), t.TempDir(), t.TempDir())
+	defer s.Close()
 	tok, err := signJWT(s.jwtKey)
 	if err != nil {
 		t.Fatalf("sign jwt: %v", err)
@@ -165,6 +166,7 @@ func TestCookieNoLongerAuthenticates(t *testing.T) {
 		t.Skipf("manager unavailable (%v)", err)
 	}
 	s := New(context.Background(), m, t.TempDir(), t.TempDir(), t.TempDir())
+	defer s.Close()
 	h := s.Handler()
 
 	r2 := httptest.NewRequest(http.MethodGet, "/api/stats", nil)
@@ -184,7 +186,14 @@ func TestAuthSSEToken(t *testing.T) {
 	if err != nil {
 		t.Skipf("manager unavailable (%v)", err)
 	}
+	// Cleanup ordering: drain the server's background workers FIRST (archive
+	// worker, engine loops reloaded from PG), THEN close the manager's DB, and
+	// only then let testing remove the temp dirs. Without s.Close the workers
+	// outlived the test and raced t.TempDir's RemoveAll ("directory not
+	// empty") while polling the already-closed database.
+	t.Cleanup(func() { _ = m.Close() })
 	s := New(context.Background(), m, t.TempDir(), t.TempDir(), t.TempDir())
+	t.Cleanup(s.Close)
 	h := s.Handler()
 	tok, err := signJWT(s.jwtKey)
 	if err != nil {
@@ -254,6 +263,7 @@ func TestForeignOriginCannotCreateMCP(t *testing.T) {
 	}
 	td := t.TempDir()
 	s := New(context.Background(), m, td, td, td)
+	defer s.Close()
 	h := s.Handler()
 	tok, _ := signJWT(s.jwtKey)
 

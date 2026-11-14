@@ -20,6 +20,7 @@ func TestMgmtAPI(t *testing.T) {
 	}
 	td := t.TempDir()
 	s := New(context.Background(), m, td, td, td)
+	defer s.Close()
 	h := s.Handler()
 	tok, err := signJWT(s.jwtKey)
 	if err != nil {

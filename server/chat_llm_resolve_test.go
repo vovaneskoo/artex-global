@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/testutil"
 )
 
 // TestChatUnavailableReasonDistinguishesStates pins the operator-facing message
@@ -15,11 +16,22 @@ func TestChatUnavailableReasonDistinguishesStates(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
-	defer m.Close()
+	// Teardown via t.Cleanup (NOT defer): defers run before t.Cleanup
+	// functions, and the fixture restore registered below needs the database
+	// still open. LIFO order: restore profiles → drain server workers → close
+	// the manager's DB → testing removes the temp dirs.
+	t.Cleanup(func() { _ = m.Close() })
 	td := t.TempDir()
 	s := New(context.Background(), m, td, td, td)
+	t.Cleanup(s.Close)
 
-	// Start from a clean profile table; other tests in the shared DB may have left rows.
+	// This test wipes the whole profile table to pin the "nothing configured"
+	// message. That is GLOBAL fixture state (the active profile lives here), so
+	// snapshot and restore it: deleting only what we ourselves added (the old
+	// approach) left later tests — in any order — with a table the earlier
+	// suite state never had, and on a shared database it destroyed the active
+	// profile outright.
+	testutil.PreserveTable(t, m.pg.DB, "llm_profiles")
 	existing, _ := m.pg.ListProfiles()
 	for _, p := range existing {
 		if p.IsDefault {
@@ -68,6 +80,7 @@ func TestResolveChatAgentHonoursConversationProfile(t *testing.T) {
 	defer m.Close()
 	td := t.TempDir()
 	s := New(context.Background(), m, td, td, td)
+	defer s.Close()
 
 	// Force the global fallback to nil so a non-nil result can ONLY come from the
 	// conversation's own profile — this is exactly the situation the user hit
