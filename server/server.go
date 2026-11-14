@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -772,6 +773,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/auth/init", s.authInit)
 	mux.HandleFunc("POST /api/auth/login", s.authLogin)
 	mux.HandleFunc("POST /api/auth/change-password", s.authChangePassword)
+	// Short-lived ticket for EventSource (which cannot send Authorization headers).
+	mux.HandleFunc("POST /api/auth/sse-token", s.authSSEToken)
 
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/stats", s.stats)
@@ -1049,10 +1052,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/intercept/judge", s.interceptSetJudgeConfig)
 	mux.HandleFunc("GET /api/intercept/judge/usage", s.interceptJudgeUsage) // 모델 판정(대체 승인) 누적 token 사용량
 
-	// /api/* goes through CORS + JWT; everything else is served by the embedded
-	// frontend (public — auth is enforced client-side and on the API). With the
-	// no-embed build the webui handler just 404s (run `next dev` separately).
-	api := cors(s.requireAuth(mux))
+	// /api/* goes through CORS → mutation guard (Origin + media type, the CSRF
+	// layer) → JWT; everything else is served by the embedded frontend (public —
+	// auth is enforced client-side and on the API). With the no-embed build the
+	// webui handler just 404s (run `next dev` separately).
+	api := cors(s.guardAPI(s.requireAuth(mux)))
 	root := http.NewServeMux()
 	root.Handle("/api/", api)
 	root.Handle("/", s.webuiHandler())
@@ -4148,6 +4152,97 @@ func corsWith(allowed map[string]bool, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// --- CSRF guard (browser-origin + media type on mutating /api requests) ---
+
+// apiErrOriginBlocked / apiErrUnsupportedMedia are the guard's user-facing
+// rejections (surfaced as toasts by the UI, like every writeErr message).
+const (
+	apiErrOriginBlocked    = "허용되지 않은 출처(Origin)의 변경 요청입니다. 이 UI 를 제공한 주소에서만 변경할 수 있습니다"
+	apiErrUnsupportedMedia = "변경 요청의 Content-Type 은 application/json (또는 파일 업로드는 multipart/form-data) 이어야 합니다"
+)
+
+// guardAPI is the CSRF layer for every mutating /api request (POST/PUT/PATCH/
+// DELETE), including the /api/auth/* routes requireAuth exempts. Two checks:
+//
+//  1. Origin: a browser always sends Origin on cross-origin mutations. If it is
+//     present and is neither the request's own origin (Host, or X-Forwarded-Host
+//     behind a reverse proxy) nor on the CORS allowlist, the request is forged
+//     cross-site traffic and is rejected before any handler state changes. CORS
+//     alone is not enough here: it only hides the response from the browser —
+//     the mutation (e.g. MCP save, which spawns a stdio discovery process) still
+//     executed. Requests without Origin (curl, scripts, tests) pass: they are
+//     not browsers and cannot be cross-site forged.
+//  2. Media type: a request body Content-Type other than application/json /
+//     multipart/form-data is rejected with 415. This closes the "simple request"
+//     bypass (text/plain forms, no-cors fetch) that skips the CORS preflight
+//     while still carrying a JSON body the handlers would happily decode. An
+//     absent Content-Type is allowed so body-less DELETEs and plain curl keep
+//     working.
+//
+// Together with cookie auth being removed from extractToken (the third leg of
+// the fix: no ambient credential a forged request could ride on), mutating
+// endpoints can no longer be driven from another page on the same host — which
+// shares cookies across ports (localhost:5173 vs localhost:9999 are one site).
+func (s *Server) guardAPI(next http.Handler) http.Handler {
+	return guardAPIWith(corsAllowedOrigins(), next)
+}
+
+func guardAPIWith(allowed map[string]bool, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isMutatingMethod(r.Method) {
+			if origin := r.Header.Get("Origin"); origin != "" && !originAllowed(r, origin, allowed) {
+				log.Printf("[api] %s %s: 출처 거부 (Origin: %s, host: %s, client=%s) — 정상 클라이언트라면 %s 에 출처를 추가하세요",
+					r.Method, r.URL.Path, origin, r.Host, clientLogID(r), corsOriginsEnv)
+				writeErr(w, 403, apiErrOriginBlocked)
+				return
+			}
+			if ct := r.Header.Get("Content-Type"); ct != "" {
+				if mt, _, err := mime.ParseMediaType(ct); err != nil || (mt != "application/json" && mt != "multipart/form-data") {
+					writeErr(w, 415, apiErrUnsupportedMedia)
+					return
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func isMutatingMethod(m string) bool {
+	switch m {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	}
+	return false
+}
+
+// originAllowed reports whether origin may mutate this server: the CORS
+// allowlist (ARTEX_CORS_ORIGINS, defaulting to the `next dev` origins) or the
+// request's own origin. Same-origin is Host[:port] equality against the Origin
+// host[:port] (scheme-insensitive: a TLS-terminating proxy can make the browser
+// say https while the upstream hop is http). Proxies that rewrite Host to the
+// upstream address (nginx proxy_pass default) are covered via X-Forwarded-Host
+// (first entry only — the header is client-appendable, so it is trusted solely
+// as an ADDITIONAL allowed host, never as a replacement for Host).
+func originAllowed(r *http.Request, origin string, allowed map[string]bool) bool {
+	if allowed["*"] || allowed[strings.ToLower(origin)] {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" { // "null" / garbage origins are never same-origin
+		return false
+	}
+	if strings.EqualFold(u.Host, r.Host) {
+		return true
+	}
+	if xf := r.Header.Get("X-Forwarded-Host"); xf != "" {
+		first := strings.TrimSpace(strings.SplitN(xf, ",", 2)[0])
+		if first != "" && strings.EqualFold(u.Host, first) {
+			return true
+		}
+	}
+	return false
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

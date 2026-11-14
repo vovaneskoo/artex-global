@@ -17,7 +17,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { api, sseUrl } from "@/lib/api";
+import { api } from "@/lib/api";
+import { openSseStream } from "@/lib/sse";
 import type { UpdateCheck, UpdateProgress } from "@/lib/types";
 
 /** 等待新版本上线的最长时间。一次升级要经过三次进程启动（暂存 → 换装 → 新版），
@@ -109,34 +110,36 @@ export function UpdateCard() {
   );
 
   // 订阅更新进度。SSE 不走 Next 的 /api 重写（那层会缓冲，事件推不出来）。
+  // 短时效 ticket 握手见 lib/sse.ts。
   const openStream = React.useCallback(
     (fromVersion: string) => {
-      const es = new EventSource(sseUrl("/api/update/stream"));
-      es.onmessage = (ev) => {
-        let p: UpdateProgress;
-        try {
-          p = JSON.parse(ev.data) as UpdateProgress;
-        } catch {
-          return;
-        }
-        setProgress(p);
-        if (p.phase === "failed") {
-          es.close();
-          setBusy(false);
-          toast.error(t("update.toast.updateFailed", { error: p.error || p.message }));
-          return;
-        }
-        if (p.phase === "staged") {
-          es.close();
-          void waitForNewVersion(fromVersion);
-        }
-      };
-      es.onerror = () => {
-        // 进程退出时 SSE 必然断开。如果已经进入等待重启，这属于正常现象，
-        // 交给 /api/health 轮询继续判定即可。
-        es.close();
-      };
-      return es;
+      const stream = openSseStream("/api/update/stream", {
+        onMessage: (ev) => {
+          let p: UpdateProgress;
+          try {
+            p = JSON.parse(ev.data) as UpdateProgress;
+          } catch {
+            return;
+          }
+          setProgress(p);
+          if (p.phase === "failed") {
+            stream.close();
+            setBusy(false);
+            toast.error(t("update.toast.updateFailed", { error: p.error || p.message }));
+            return;
+          }
+          if (p.phase === "staged") {
+            stream.close();
+            void waitForNewVersion(fromVersion);
+          }
+        },
+        onError: () => {
+          // 进程退出时 SSE 必然断开。如果已经进入等待重启，这属于正常现象，
+          // 交给 /api/health 轮询继续判定即可。返回 false = 不要自动重连。
+          return false;
+        },
+      });
+      return stream;
     },
     [waitForNewVersion, t],
   );

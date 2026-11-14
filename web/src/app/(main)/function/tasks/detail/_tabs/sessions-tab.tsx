@@ -51,7 +51,8 @@ import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useSideQuestions } from "@/hooks/use-side-questions";
-import { api, sseUrl } from "@/lib/api";
+import { api } from "@/lib/api";
+import { type SseStream, openSseStream } from "@/lib/sse";
 import { shouldSubmitOnKey, useChatSendMode } from "@/lib/chat-send-mode";
 import { MOCK } from "@/lib/mock/enabled";
 import { isBtwCommand } from "@/lib/side-questions";
@@ -657,7 +658,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
 
   // Refs backing SSE/loading without re-render churn.
   const snapshotRef = React.useRef(0); // task-level snapshot cursor → SSE since=
-  const esRef = React.useRef<EventSource | null>(null);
+  const esRef = React.useRef<SseStream | null>(null);
   const activeKeyRef = React.useRef(mainSessionKey(0)); // current session key (for SSE dispatch/unread)
   // Highest seq the SSE-down fallback poll has already merged, per session key —
   // lets it skip setStore when a poll brings nothing new (no re-render churn).
@@ -985,14 +986,18 @@ export function SessionsTab({ taskId }: { taskId: string }) {
             unread: 0,
           };
         });
-        // Open the single task SSE from the snapshot cursor.
-        const es = new EventSource(
-          sseUrl(`/api/exploration/activity/stream?task=${encodeURIComponent(taskId)}&since=${snapshotRef.current}`),
-        );
-        esRef.current = es;
-        es.onopen = () => setSseLive(true);
-        es.onerror = () => setSseLive(false); // EventSource auto-reconnects; DB compensates the gap
-        es.onmessage = (e) => {
+        // Open the single task SSE from the snapshot cursor. The stream helper
+        // mints a short-lived ticket and reconnects with a fresh one on drop;
+        // DB history loads compensate any gap.
+        esRef.current = openSseStream(
+          `/api/exploration/activity/stream?task=${encodeURIComponent(taskId)}&since=${snapshotRef.current}`,
+          {
+            onOpen: () => setSseLive(true),
+            onError: () => {
+              setSseLive(false);
+              return true; // keep reconnecting (auto-reconnect with a fresh ticket)
+            },
+            onMessage: (e) => {
           let a: Activity;
           try {
             a = JSON.parse(e.data) as Activity;
@@ -1048,7 +1053,9 @@ export function SessionsTab({ taskId }: { taskId: string }) {
             const unread = k === activeK ? 0 : cur.unread + 1;
             return { ...prev, [k]: { ...cur, items, lastTs: a.ts, unread, hasMore, earliestSeq } };
           });
-        };
+            },
+          },
+        );
       })
       .catch((err) => {
         if (!alive || reqTokenRef.current.mainboot !== token) return;

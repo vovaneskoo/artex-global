@@ -440,16 +440,56 @@ func (s *Server) WarnIfExposed(addr string) {
 	log.Printf(logT("[auth] 경고: 관리자 비밀번호가 아직 설정되지 않았는데 서버가 %q 에 바인딩되어 다른 호스트에서도 접속할 수 있습니다. 설정 토큰 없이는 초기화할 수 없지만, 초기 설정을 마칠 때까지 이 포트를 외부 네트워크에 노출하지 마십시오(기본값 127.0.0.1:8787)"), addr)
 }
 
-// extractToken reads the JWT from Authorization: Bearer header,
-// artex_token cookie, or ?token= query param (for SSE connections).
+// extractToken reads the JWT from Authorization: Bearer header, the ?ticket=
+// query param (short-lived SSE ticket, see authSSEToken), or the legacy ?token=
+// query param. Cookie auth is deliberately NOT supported: cookies are shared
+// across every port on the same host (localhost:5173 and localhost:9999 are the
+// same "site" for cookie purposes), so a cookie-bearing JWT made every mutating
+// endpoint forgeable from any other page on the host (CSRF). The web client has
+// always sent Authorization: Bearer; ?token= stays only as a migration path for
+// scripted SSE clients and must not carry long-lived tokens.
 func extractToken(r *http.Request) string {
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 		return strings.TrimPrefix(h, "Bearer ")
 	}
-	if c, err := r.Cookie("artex_token"); err == nil && c.Value != "" {
-		return c.Value
+	if t := r.URL.Query().Get("ticket"); t != "" {
+		return t
 	}
 	return r.URL.Query().Get("token")
+}
+
+// sseTicketTTL bounds the lifetime of the short-lived token returned by
+// /api/auth/sse-token. EventSource cannot set headers, so the ticket travels in
+// the URL (?ticket=) where it can leak into logs/history; 10 minutes of exposure
+// beats the 7-day session JWT that ?token= used to leak. The ticket only
+// authenticates the stream handshake — reconnects mint a fresh one client-side.
+const sseTicketTTL = 10 * time.Minute
+
+// POST /api/auth/sse-token — exchanges the caller's Bearer session for a
+// short-lived token usable in a URL (?ticket=) by EventSource, which cannot
+// send headers. The route lives under /api/auth/* (requireAuth-exempt), so the
+// Bearer token is validated here directly, like authChangePassword does.
+func (s *Server) authSSEToken(w http.ResponseWriter, r *http.Request) {
+	if !s.verifyToken(extractToken(r)) {
+		writeErr(w, 401, authErrUnauthorized)
+		return
+	}
+	hash, err := s.cachedPassHash()
+	if err != nil {
+		writeErr(w, 503, authErrDataSourceUnavailable)
+		return
+	}
+	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
+		Subject:   "ARTEX",
+		Audience:  jwt.ClaimStrings{"sse"},
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(sseTicketTTL)),
+		IssuedAt:  jwt.NewNumericDate(time.Now()),
+	}).SignedString(s.signingKey(hash))
+	if err != nil {
+		writeErr(w, 500, authErrTokenGen)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"token": tok, "expires_in": int(sseTicketTTL.Seconds())})
 }
 
 // requireAuth wraps h with JWT validation.

@@ -8,7 +8,14 @@ export function proxy(request: NextRequest) {
   if (process.env.NEXT_PUBLIC_MOCK === "1") return NextResponse.next();
 
   const { pathname } = request.nextUrl;
-  const token = request.cookies.get("artex_token")?.value;
+  // Session presence only — never a credential. The new marker cookie (artex_auth)
+  // says "logged in"; the legacy artex_token cookie (which used to carry the JWT)
+  // is still honored for routing so sessions created before the upgrade are not
+  // bounced to /login. API auth is always the Authorization header, so a stale
+  // legacy cookie grants no API access — the backend rejects cookie auth.
+  const sessionCookie = request.cookies.get("artex_auth")?.value;
+  const legacyCookie = request.cookies.get("artex_token")?.value;
+  const token = sessionCookie === "1" || legacyCookie;
   const isAuthPage = AUTH_PAGES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 
   // 未登录 → 跳转登录页

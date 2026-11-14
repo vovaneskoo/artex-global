@@ -6,7 +6,7 @@ import { useTranslations } from "next-intl";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { sseUrl } from "@/lib/api";
+import { openSseStream } from "@/lib/sse";
 import { MOCK } from "@/lib/mock/enabled";
 import type { LogLine } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -104,16 +104,17 @@ export default function LogsPage() {
       setLines(MOCK_LOGS);
       return;
     }
-    const es = new EventSource(sseUrl("/api/logs/stream?since=0"));
-    es.onmessage = (e) => {
-      if (pausedRef.current) return;
-      try {
-        const l = JSON.parse(e.data) as LogLine;
-        setLines((prev) => (prev.some((x) => x.seq === l.seq) ? prev : [...prev, l].slice(-3000)));
-      } catch {
-        /* ignore malformed frame */
-      }
-    };
+    const es = openSseStream("/api/logs/stream?since=0", {
+      onMessage: (e) => {
+        if (pausedRef.current) return;
+        try {
+          const l = JSON.parse(e.data) as LogLine;
+          setLines((prev) => (prev.some((x) => x.seq === l.seq) ? prev : [...prev, l].slice(-3000)));
+        } catch {
+          /* ignore malformed frame */
+        }
+      },
+    });
     return () => es.close();
   }, []);
 
