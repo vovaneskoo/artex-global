@@ -1,5 +1,7 @@
 package report
 
+import "strings"
+
 // bundle holds every user-facing skeleton string of the task report, per
 // locale. Supported: en, ru, ko (report.go bundleFor); unsupported locales
 // fall back to en. Keys are fixed wording — format verbs only (e.g. %d, %s),
@@ -120,6 +122,157 @@ var ruBundle = bundle{
 	scopeLine:  "Отчёт сформирован только из данных задачи %s (исследование #%d): её собственных активов, фактов и находок. Данные других задач и проектов не включаются.",
 	evidenceLine: "Доказательства приводятся как ссылки (finding #id, привязки трафика, node #id), а не сырыми дампами: полные снимки запросов и ответов находятся на странице находок и в хранилище доказательств. " +
 		"Сырые секреты в текст отчёта сознательно не вставляются.",
+}
+
+// findingsBundle holds every user-facing skeleton string of the findings-page
+// export renderers (findings.go): the multi-finding summary Markdown, the
+// single-finding Markdown, the traffic-evidence section and the CSV header.
+// Same rules as bundle: fixed wording, format verbs only, never reordered
+// placeholders.
+type findingsBundle struct {
+	summaryReportTitle string // "# <title>"
+	generatedLabel     string // "- **<label>**: <time>"
+	totalFmt           string // %d = finding count
+	summaryTitle       string
+	severityCol        string
+	countCol           string
+	sevCritical        string
+	sevHigh            string
+	sevMedium          string
+	sevLow             string
+	emptyLine          string // shown when the filter matches nothing
+	detailsTitle       string
+	typeLabel          string
+	statusLabel        string
+	severityLabel      string // single-finding "- **<label>**"
+	taskLabel          string
+	foundAtLabel       string
+	evidenceLabel      string // "**<label>:**"
+	reportLabel        string // "**<label>:**" (multi-finding)
+	overviewTitle      string // "## <title>"
+	evidenceTitle      string // "## <title>"
+	reportTitle        string // "## <title>" (single-finding)
+	trafficTitle       string // "## <title>"
+	trafficVerFmt      string // %1$d evidence version, %2$d binding count
+	trafficStale       string
+	trafficEntryFmt    string // %1$d idx, %2$d evidence id, %3$s role, %4$s method, %5$s url, %6$d status
+	requestMsg         string
+	responseMsg        string
+	unclassified       string // fallback finding title
+	csvHeader          []string
+}
+
+var enFindings = findingsBundle{
+	summaryReportTitle: "Findings summary report",
+	generatedLabel:     "Generated at",
+	totalFmt:           "**Total findings**: %d",
+	summaryTitle:       "Summary",
+	severityCol:        "Severity",
+	countCol:           "Count",
+	sevCritical:        "Critical",
+	sevHigh:            "High",
+	sevMedium:          "Medium",
+	sevLow:             "Low",
+	emptyLine:          "_No findings match the filter._",
+	detailsTitle:       "Finding details",
+	typeLabel:          "Type",
+	statusLabel:        "Status",
+	severityLabel:      "Severity",
+	taskLabel:          "Task",
+	foundAtLabel:       "Found at",
+	evidenceLabel:      "Evidence:",
+	reportLabel:        "Detailed report:",
+	overviewTitle:      "Overview",
+	evidenceTitle:      "Evidence",
+	reportTitle:        "Detailed report",
+	trafficTitle:       "Related traffic evidence",
+	trafficVerFmt:      "Evidence version: %d, bindings: %d.",
+	trafficStale:       "Evidence has changed; the detailed report needs to be regenerated.",
+	trafficEntryFmt:    "%d. **Evidence #%d · %s**: `%s %s`, status code %d",
+	requestMsg:         "Request message",
+	responseMsg:        "Response message",
+	unclassified:       "Unclassified",
+	csvHeader:          []string{"ID", "Name", "Type", "Severity", "Status", "Task", "Found at", "Overview", "Traffic evidence count", "Traffic evidence IDs"},
+}
+
+var ruFindings = findingsBundle{
+	summaryReportTitle: "Сводный отчёт по находкам",
+	generatedLabel:     "Время формирования",
+	totalFmt:           "**Всего находок**: %d",
+	summaryTitle:       "Сводка",
+	severityCol:        "Серьёзность",
+	countCol:           "Количество",
+	sevCritical:        "Критическая",
+	sevHigh:            "Высокая",
+	sevMedium:          "Средняя",
+	sevLow:             "Низкая",
+	emptyLine:          "_Под фильтр не попала ни одна находка._",
+	detailsTitle:       "Детали находок",
+	typeLabel:          "Тип",
+	statusLabel:        "Статус",
+	severityLabel:      "Серьёзность",
+	taskLabel:          "Задача",
+	foundAtLabel:       "Время обнаружения",
+	evidenceLabel:      "Доказательство:",
+	reportLabel:        "Подробный отчёт:",
+	overviewTitle:      "Обзор",
+	evidenceTitle:      "Доказательство",
+	reportTitle:        "Подробный отчёт",
+	trafficTitle:       "Связанные доказательства трафика",
+	trafficVerFmt:      "Версия доказательств: %d, привязок: %d.",
+	trafficStale:       "Доказательства изменились — подробный отчёт нужно переформировать.",
+	trafficEntryFmt:    "%d. **Доказательство #%d · %s**: `%s %s`, код состояния %d",
+	requestMsg:         "Сообщение запроса",
+	responseMsg:        "Сообщение ответа",
+	unclassified:       "Без класса",
+	csvHeader:          []string{"ID", "Название", "Тип", "Серьёзность", "Статус", "Задача", "Время обнаружения", "Обзор", "Кол-во доказательств трафика", "ID доказательств трафика"},
+}
+
+var koFindings = findingsBundle{
+	summaryReportTitle: "취약점 요약 보고서",
+	generatedLabel:     "생성 시각",
+	totalFmt:           "**취약점 총계**: %d건",
+	summaryTitle:       "요약",
+	severityCol:        "심각도",
+	countCol:           "개수",
+	sevCritical:        "심각",
+	sevHigh:            "높음",
+	sevMedium:          "중간",
+	sevLow:             "낮음",
+	emptyLine:          "_일치하는 취약점이 없습니다._",
+	detailsTitle:       "취약점 상세",
+	typeLabel:          "유형",
+	statusLabel:        "상태",
+	severityLabel:      "심각도",
+	taskLabel:          "소속 작업",
+	foundAtLabel:       "발견 시각",
+	evidenceLabel:      "증거:",
+	reportLabel:        "상세 보고서:",
+	overviewTitle:      "개요",
+	evidenceTitle:      "증거",
+	reportTitle:        "상세 보고서",
+	trafficTitle:       "관련 트래픽 증거",
+	trafficVerFmt:      "증거 버전: %d, 바인딩 개수: %d.",
+	trafficStale:       "증거가 변경되어 상세 보고서를 갱신해야 합니다.",
+	trafficEntryFmt:    "%d. **증거 #%d · %s**: `%s %s`, 상태 코드 %d",
+	requestMsg:         "요청 메시지",
+	responseMsg:        "응답 메시지",
+	unclassified:       "미분류",
+	csvHeader:          []string{"ID", "이름", "유형", "심각도", "상태", "소속 작업", "발견 시각", "개요", "트래픽 증거 개수", "트래픽 증거 ID"},
+}
+
+// findingsBundleFor resolves the findings-export skeleton language with the
+// same rules as bundleFor: en/ru/ko supported, everything else (including "")
+// falls back to English.
+func findingsBundleFor(locale string) findingsBundle {
+	switch strings.ToLower(strings.TrimSpace(locale)) {
+	case "ru":
+		return ruFindings
+	case "ko":
+		return koFindings
+	default:
+		return enFindings
+	}
 }
 
 var koBundle = bundle{

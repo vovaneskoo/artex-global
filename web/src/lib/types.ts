@@ -1582,6 +1582,8 @@ export interface UpdateCheck {
   rolled_back?: boolean;
   /** 查询 GitHub 失败时给出原因，此时下面的字段都不会有。 */
   error?: string;
+  /** 本构建禁用了自更新（安全补丁）：不是网络/代理问题，error 字段不会设置。 */
+  disabled?: boolean;
   latest?: string;
   notes?: string;
   html_url?: string;

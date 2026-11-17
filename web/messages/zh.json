@@ -3217,6 +3217,7 @@
       "modeStandalone": "独立程序",
       "changelog": "更新日志",
       "connectError": "无法连接 GitHub：{error}　可在上方配置全局代理后重试。",
+      "disabledBuild": "此构建已通过安全补丁禁用一键更新（更新源仓库已被删除）。无法从页面更新——这不是网络或代理的问题。",
       "noAsset": "{latest} 没有提供 {os}/{arch} 的发布包（缺少 {asset}），无法自动更新。",
       "willDownloadPrefix": "将下载 ",
       "willDownloadSize": "（{size}）",

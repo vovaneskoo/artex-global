@@ -3217,6 +3217,7 @@
       "modeStandalone": "スタンドアロンプログラム",
       "changelog": "変更履歴",
       "connectError": "GitHub に接続できません: {error} 上でグローバルプロキシを設定してから、もう一度お試しください。",
+      "disabledBuild": "このビルドではセキュリティパッチによりワンクリック更新が無効になっています（更新ソースのリポジトリが削除されました）。ページからの更新はできません——ネットワークやプロキシの問題ではありません。",
       "noAsset": "{latest} には {os}/{arch} 用のリリースパッケージがなく ({asset} が見つかりません)、自動でアップデートできません。",
       "willDownloadPrefix": "ダウンロード対象: ",
       "willDownloadSize": " ({size})",

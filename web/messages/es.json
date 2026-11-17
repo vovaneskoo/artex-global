@@ -3217,6 +3217,7 @@
       "modeStandalone": "Programa independiente",
       "changelog": "Registro de cambios",
       "connectError": "No se puede conectar con GitHub: {error} Puede configurar el proxy global de arriba y volver a intentarlo.",
+      "disabledBuild": "La actualización con un clic está desactivada en esta compilación por un parche de seguridad (el repositorio de origen de las actualizaciones fue eliminado). No se puede actualizar desde esta página: no es un problema de red ni de proxy.",
       "noAsset": "{latest} no tiene un paquete de lanzamiento para {os}/{arch} (falta {asset}), por lo que no se puede actualizar automáticamente.",
       "willDownloadPrefix": "Se descargará: ",
       "willDownloadSize": " ({size})",

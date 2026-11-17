@@ -21,7 +21,11 @@ import (
 // ARTEX_ENABLE_SELFUPDATE=1. Local file operations (Bootstrap swap of an
 // already staged binary, Rollback) are unaffected but can never acquire new
 // code while Stage is gated.
-var errSelfupdateDisabled = errors.New("self-update is disabled by build patch (set ARTEX_ENABLE_SELFUPDATE=1 to re-enable; update source is the deleted upstream Autumn-27/artex — do not re-enable)")
+//
+// Exported so the HTTP layer (server/update.go) can distinguish "updates are
+// disabled in this build" from a connectivity failure: the UI must not tell
+// the operator to fix a proxy when the build itself refuses to phone home.
+var ErrDisabled = errors.New("self-update is disabled by build patch (set ARTEX_ENABLE_SELFUPDATE=1 to re-enable; update source is the deleted upstream Autumn-27/artex — do not re-enable)")
 
 func selfupdateEnabled() bool { return os.Getenv("ARTEX_ENABLE_SELFUPDATE") == "1" }
 
@@ -102,7 +106,7 @@ func checkURL(u *url.URL) error {
 // FetchLatest 查询最新正式版。
 func FetchLatest(ctx context.Context, c *http.Client) (*Release, error) {
 	if !selfupdateEnabled() {
-		return nil, errSelfupdateDisabled
+		return nil, ErrDisabled
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, latestURL, nil)
 	if err != nil {

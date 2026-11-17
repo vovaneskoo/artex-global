@@ -112,7 +112,7 @@ func TestReportMarkdownEmptyLocalized(t *testing.T) {
 // 한국어이고 중국어 한자가 없음을 검증한다.
 func TestFindingsMarkdownLocalized(t *testing.T) {
 	f := sampleDBFinding()
-	out := FindingsMarkdown([]*db.DBFinding{f}, time.Date(2026, 10, 4, 2, 30, 0, 0, time.UTC))
+	out := FindingsMarkdown([]*db.DBFinding{f}, time.Date(2026, 10, 4, 2, 30, 0, 0, time.UTC), "ko")
 	if r, ok := containsHan(out); ok {
 		t.Fatalf("취약점 요약 보고서에 중국어 한자 %q 가 남아 있다:\n%s", string(r), out)
 	}
@@ -138,7 +138,7 @@ func TestFindingsMarkdownLocalized(t *testing.T) {
 		}
 	}
 
-	single := SingleFindingMarkdown(f, time.Date(2026, 10, 4, 2, 30, 0, 0, time.UTC))
+	single := SingleFindingMarkdown(f, time.Date(2026, 10, 4, 2, 30, 0, 0, time.UTC), "ko")
 	if r, ok := containsHan(single); ok {
 		t.Fatalf("단건 보고서에 중국어 한자 %q 가 남아 있다:\n%s", string(r), single)
 	}
@@ -156,10 +156,98 @@ func TestFindingsMarkdownLocalized(t *testing.T) {
 	}
 }
 
+// TestFindingsExportRussianLocale (F-04): the findings-page export skeleton —
+// summary Markdown, single-finding Markdown and the CSV header — must render
+// Russian when the ru locale is active, with no Korean skeleton leftovers and
+// no Han characters. Before the locale plumbing these headers were hardcoded
+// Korean regardless of the operator's language.
+func TestFindingsExportRussianLocale(t *testing.T) {
+	f := sampleDBFinding()
+	when := time.Date(2026, 11, 14, 10, 0, 0, 0, time.UTC)
+
+	out := FindingsMarkdown([]*db.DBFinding{f}, when, "ru")
+	for _, want := range []string{
+		"# Сводный отчёт по находкам",
+		"- **Время формирования**:",
+		"- **Всего находок**: 1",
+		"## Сводка",
+		"| Серьёзность | Количество |",
+		"| Критическая |", "| Высокая |", "| Средняя |", "| Низкая |",
+		"## Детали находок",
+		"- **Тип**: SQL Injection",
+		"- **Статус**: confirmed",
+		"- **Задача**: 데모 대상 침투 테스트",
+		"- **Время обнаружения**:",
+		"**Доказательство:**",
+		"**Подробный отчёт:**",
+		"## Связанные доказательства трафика",
+		"Версия доказательств: 2, привязок: 1.",
+		"**Доказательство #9 · request**: `POST https://sandbox.local/login`, код состояния 200",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("ru findings export missing %q:\n%s", want, out)
+		}
+	}
+	if r, ok := containsHan(out); ok {
+		t.Errorf("ru findings export contains Han %q:\n%s", string(r), out)
+	}
+
+	single := SingleFindingMarkdown(f, when, "ru")
+	for _, want := range []string{
+		"- **Серьёзность**: high",
+		"## Обзор",
+		"## Доказательство",
+		"## Подробный отчёт",
+		"[Сообщение запроса](evidence/123/9/request.http)",
+		"[Сообщение ответа](evidence/123/9/response.http)",
+	} {
+		if !strings.Contains(single, want) {
+			t.Errorf("ru single-finding export missing %q:\n%s", want, single)
+		}
+	}
+	if r, ok := containsHan(single); ok {
+		t.Errorf("ru single-finding export contains Han %q:\n%s", string(r), single)
+	}
+
+	raw := FindingsCSV([]*db.DBFinding{f}, "ru")
+	header := strings.SplitN(strings.TrimPrefix(string(raw), "\xEF\xBB\xBF"), "\n", 2)[0]
+	for _, col := range []string{"ID", "Название", "Тип", "Серьёзность", "Статус", "Задача", "Время обнаружения", "Обзор", "Кол-во доказательств трафика", "ID доказательств трафика"} {
+		if !strings.Contains(header, col) {
+			t.Errorf("ru CSV header missing %q: %s", col, header)
+		}
+	}
+	if r, ok := containsHan(header); ok {
+		t.Errorf("ru CSV header contains Han %q: %s", string(r), header)
+	}
+
+	// Unnamed finding falls back to the locale's "unclassified" word in both the
+	// markdown title and the export filename.
+	unnamed := &db.DBFinding{ID: 7, Severity: "low"}
+	if got := SingleFindingMarkdown(unnamed, when, "ru"); !strings.Contains(got, "Без класса") {
+		t.Errorf("ru unnamed finding missing «Без класса»:\n%s", got)
+	}
+	if got := FindingFilename(unnamed, "ru"); !strings.Contains(got, "Без_класса") {
+		t.Errorf("ru filename missing «Без_класса»: %q", got)
+	}
+}
+
+// TestFindingsExportFallbackLocale: unsupported locales (and the empty locale)
+// fall back to the English export skeleton, same rule as the task report.
+func TestFindingsExportFallbackLocale(t *testing.T) {
+	f := sampleDBFinding()
+	when := time.Date(2026, 11, 14, 10, 0, 0, 0, time.UTC)
+	reference := FindingsMarkdown([]*db.DBFinding{f}, when, "en")
+	for _, locale := range []string{"", "fr", "EN", "zh", "xx-nonsense"} {
+		if got := FindingsMarkdown([]*db.DBFinding{f}, when, locale); got != reference {
+			t.Errorf("locale %q did not fall back to the en findings skeleton:\n--- got ---\n%s\n--- en ---\n%s", locale, got, reference)
+		}
+	}
+}
+
 // TestFindingsCSVLocalized 는 CSV 익스포트 헤더가 한국어이고 중국어 한자가 없음을 검증한다.
 // (BOM 뒤 헤더 행만 한국어면 된다. 데이터 값은 원본 그대로 둔다.)
 func TestFindingsCSVLocalized(t *testing.T) {
-	raw := FindingsCSV([]*db.DBFinding{sampleDBFinding()})
+	raw := FindingsCSV([]*db.DBFinding{sampleDBFinding()}, "ko")
 	out := strings.TrimPrefix(string(raw), "\xEF\xBB\xBF")
 	header := strings.SplitN(out, "\n", 2)[0]
 	if r, ok := containsHan(header); ok {

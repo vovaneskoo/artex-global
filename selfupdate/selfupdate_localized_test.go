@@ -9,6 +9,7 @@ package selfupdate
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -124,4 +125,16 @@ func TestStageMissingAssetLocalized(t *testing.T) {
 	rel := &Release{TagName: "v9.9.9"} // Assets 비어 있음
 	err := Stage(context.Background(), &http.Client{}, rel, "0.0.1", nil)
 	assertKoreanError(t, "stage-missing-asset", err)
+}
+
+// TestFetchLatestDisabledWithoutOptIn (F-05): without the ARTEX_ENABLE_SELFUPDATE=1
+// opt-in, FetchLatest must return ErrDisabled (errors.Is-identifiable) so the HTTP
+// layer can distinguish "disabled build" from a connectivity failure and drop the
+// wrong "configure a proxy" advice in the UI.
+func TestFetchLatestDisabledWithoutOptIn(t *testing.T) {
+	t.Setenv("ARTEX_ENABLE_SELFUPDATE", "")
+	_, err := FetchLatest(context.Background(), stubClient(http.StatusOK, "{}"))
+	if !errors.Is(err, ErrDisabled) {
+		t.Fatalf("ErrDisabled 기대, 실제 %v", err)
+	}
 }

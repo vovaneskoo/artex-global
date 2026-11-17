@@ -46,7 +46,7 @@ type Progress func(ph Phase, pct int, msg string)
 // 函数返回即代表暂存完成，调用方随后优雅关闭并以 ExitRestart 退出。
 func Stage(ctx context.Context, c *http.Client, rel *Release, currentVersion string, prog Progress) error {
 	if !selfupdateEnabled() {
-		return errSelfupdateDisabled
+		return ErrDisabled
 	}
 	if prog == nil {
 		prog = func(Phase, int, string) {}

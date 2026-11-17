@@ -3217,6 +3217,7 @@
       "modeStandalone": "Standalone program",
       "changelog": "Changelog",
       "connectError": "Can't connect to GitHub: {error} You can set the global proxy above and try again.",
+      "disabledBuild": "One-click update is disabled in this build by a security patch (the update source repository was deleted). Updating from this page is not possible — this is not a network or proxy issue.",
       "noAsset": "{latest} has no release package for {os}/{arch} ({asset} missing), so it can't be updated automatically.",
       "willDownloadPrefix": "Will download: ",
       "willDownloadSize": " ({size})",

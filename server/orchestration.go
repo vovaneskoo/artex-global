@@ -264,7 +264,7 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 			}
 			_ = json.Unmarshal(in, &a)
 			if strings.TrimSpace(a.Description) == "" {
-				a.Description = "未命名任务"
+				a.Description = s.defaultTaskDescription()
 			}
 			if strings.TrimSpace(a.Goal) == "" {
 				return actool.Errorf("goal 为必填"), nil

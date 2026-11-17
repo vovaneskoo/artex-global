@@ -242,6 +242,15 @@ export function UpdateCard() {
           </p>
         )}
 
+        {/* disabled=true: the build itself refuses to phone home (security
+            patch) — NOT a connectivity failure, so no proxy advice here. */}
+        {info?.disabled && (
+          <p className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-400">
+            <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
+            {t("update.disabledBuild")}
+          </p>
+        )}
+
         {info?.error && (
           <p className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
             <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />

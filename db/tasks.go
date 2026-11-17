@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Autumn-27/artex/config"
 )
 
 // Task is a row in the task registry (1:1 with an exploration).
@@ -169,6 +171,27 @@ func normalizeTaskSkillsMode(mode string, allowed []string) (string, []string, e
 	return mode, normalized, nil
 }
 
+// originFactSummary builds the exploration origin fact's summary in the active
+// output language (config.ActiveLanguage, wired by the server to the runtime
+// setting). The summary is user-visible in the task feed ("Начало #N …" card),
+// so a hardcoded Chinese template leaked into localized UI (QA finding).
+func originFactSummary(description, goal string) string {
+	switch config.ActiveLanguage() {
+	case "ru":
+		return "Начало задачи: " + description + "; цель: " + goal
+	case "en":
+		return "Task origin: " + description + "; goal: " + goal
+	case "ja":
+		return "タスク開始: " + description + "; 目標: " + goal
+	case "es":
+		return "Inicio de la tarea: " + description + "; objetivo: " + goal
+	case "zh":
+		return "任务起点：" + description + "；目标：" + goal
+	default: // ko and anything unresolved
+		return "작업 시작: " + description + "; 목표: " + goal
+	}
+}
+
 func (d *DB) CreateTask(description, goal string, llmProfileID *int64, timeoutSeconds, planHeartbeatSeconds int) (*Task, error) {
 	var ids []int64
 	if llmProfileID != nil {
@@ -237,7 +260,7 @@ func (d *DB) CreateTaskWithOptions(description, goal string, opts TaskCreateOpti
 	// is global and shared, not isolated per task). Being a fact (not a special 'begin' kind) lets every
 	// intent uniformly connect to a fact node, including the first ones.
 	originPayload, _ := json.Marshal(map[string]any{
-		"summary":     "任务起点：" + description + "；目标：" + goal,
+		"summary":     originFactSummary(description, goal),
 		"description": description,
 		"goal":        goal,
 	})

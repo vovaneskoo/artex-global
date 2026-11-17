@@ -53,3 +53,46 @@ func (s *Server) outputLanguage() string {
 	s.outputLang.Store(v)
 	return v
 }
+
+// defaultTaskDescription is the placeholder stored when a task is created
+// without a description (operator "new mission" body, spawn_task tool). It used
+// to be the hardcoded Chinese "未命名任务", which leaked into every localized
+// list/report under ru/en/etc. UI. Resolved from the operator's active output
+// language; the ru wording matches report.ruBundle.unnamedTask.
+func (s *Server) defaultTaskDescription() string {
+	switch s.outputLanguage() {
+	case "ru":
+		return "Задача без названия"
+	case "en":
+		return "Unnamed task"
+	case "zh":
+		return "未命名任务"
+	case "ja":
+		return "名前のないタスク"
+	case "es":
+		return "Tarea sin nombre"
+	default: // ko and anything unresolved
+		return "이름 없는 작업"
+	}
+}
+
+// seedIntentSummaryFmt is the template for the seed-first-intent summary shown
+// in the task feed / worker list: %1$s = goal, %2$s = description. Previously a
+// hardcoded Chinese template that leaked into localized UI (QA finding: the
+// worker card on the task page showed "完成任务目标：…" under a ru locale).
+func (s *Server) seedIntentSummaryFmt() string {
+	switch s.outputLanguage() {
+	case "ru":
+		return "Выполнить цель задачи: %s (задача: %s)"
+	case "en":
+		return "Accomplish the task goal: %s (task: %s)"
+	case "zh":
+		return "完成任务目标：%s（任务：%s）"
+	case "ja":
+		return "タスクの目標を達成する: %s（タスク: %s）"
+	case "es":
+		return "Cumplir el objetivo de la tarea: %s (tarea: %s)"
+	default: // ko and anything unresolved
+		return "작업 목표 완수: %s (작업: %s)"
+	}
+}

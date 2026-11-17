@@ -243,6 +243,16 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 	client := selfupdate.NewClient(s.m.GlobalProxy())
 	rel, err := relCache.get(r.Context(), client, force)
 	if err != nil {
+		// Updates disabled by the build patch are NOT a connectivity problem:
+		// answer with a structured flag instead of the generic error field, so
+		// the frontend (update-card) explains the disabled build instead of
+		// advising the operator to configure a proxy (F-05).
+		if errors.Is(err, selfupdate.ErrDisabled) {
+			out["disabled"] = true
+			out["reason"] = selfupdate.ErrDisabled.Error()
+			writeJSON(w, 200, out)
+			return
+		}
 		out["error"] = err.Error()
 		writeJSON(w, 200, out)
 		return
@@ -287,6 +297,12 @@ func (s *Server) updateApply(w http.ResponseWriter, r *http.Request) {
 	client := selfupdate.NewClient(s.m.GlobalProxy())
 	rel, err := relCache.get(r.Context(), client, false)
 	if err != nil {
+		// Disabled build ≠ bad gateway: say what actually refused (F-05) —
+		// the message must point at the disabled build, not at the network.
+		if errors.Is(err, selfupdate.ErrDisabled) {
+			writeErr(w, http.StatusServiceUnavailable, selfupdate.ErrDisabled.Error())
+			return
+		}
 		writeErr(w, 502, err.Error())
 		return
 	}
