@@ -3829,6 +3829,10 @@
     "recentFindings": "Recent findings",
     "noFindings": "No findings yet",
     "allFindings": "All",
-    "timeAgo": "{value} ago"
+    "timeAgo": "{value} ago",
+    "newTargetLabel": "New target (URL or IP)",
+    "newTargetPlaceholder": "example.com or 1.2.3.4 — press Enter to add; multiple allowed",
+    "newTargetHint": "Type new targets — a company and scope are created on launch; subdomains of a domain are covered by its scope automatically. Existing companies below.",
+    "newTargetRemove": "Remove"
   }
 }

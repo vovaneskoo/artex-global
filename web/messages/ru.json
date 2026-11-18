@@ -3829,6 +3829,10 @@
     "recentFindings": "Последние находки",
     "noFindings": "Находок пока нет",
     "allFindings": "Все",
-    "timeAgo": "{value} назад"
+    "timeAgo": "{value} назад",
+    "newTargetLabel": "Новый таргет (URL или IP)",
+    "newTargetPlaceholder": "example.com или 1.2.3.4 — Enter, чтобы добавить; можно несколько",
+    "newTargetHint": "Впиши новые цели — компания и scope создадутся при запуске; поддомены домена покрываются scope автоматически. Ниже — компании из базы.",
+    "newTargetRemove": "Убрать"
   }
 }

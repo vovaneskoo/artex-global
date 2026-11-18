@@ -4,7 +4,7 @@ import * as React from "react";
 
 import Link from "next/link";
 
-import { ActivityIcon, ArrowUpRightIcon, BugIcon, RocketIcon } from "lucide-react";
+import { ActivityIcon, ArrowUpRightIcon, BugIcon, RocketIcon, XIcon } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
@@ -23,6 +23,7 @@ import {
   ComboboxList,
   ComboboxValue,
 } from "@/components/ui/combobox";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
@@ -170,6 +171,11 @@ export default function OperatorPage() {
   const [power, setPower] = React.useState<PowerSelection>(DEFAULT_POWER_SELECTION);
   const [companies, setCompanies] = React.useState<Company[]>([]);
   const [launching, setLaunching] = React.useState(false);
+  // New-target free-text: type URLs/domains/IPs, Enter adds them as chips; each
+  // chip becomes a company+scope on launch. The domain scope covers subdomains
+  // server-side (suffix match in guard), so "apex in → subdomains allowed".
+  const [newTargets, setNewTargets] = React.useState<string[]>([]);
+  const [targetDraft, setTargetDraft] = React.useState("");
   // Bumped after a successful launch so the poll effect restarts and refetches
   // the active list immediately instead of waiting for the next 5s tick.
   const [reloadToken, setReloadToken] = React.useState(0);
@@ -181,6 +187,51 @@ export default function OperatorPage() {
       .catch(() => setCompanies([]));
   }, []);
 
+  function looksLikeTarget(token: string): boolean {
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(token)) return true; // bare IPv4
+    if (token.includes("://")) return true; // URL — parsed on launch
+    return /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/i.test(token); // hostname
+  }
+
+  function addTargetsFromDraft(): number {
+    const tokens = targetDraft
+      .split(/[\s,]+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length > 0 && looksLikeTarget(token));
+    if (tokens.length === 0) return 0;
+    setNewTargets((prev) => {
+      const seen = new Set(prev);
+      return [...prev, ...tokens.filter((token) => !seen.has(token))];
+    });
+    setTargetDraft("");
+    return tokens.length;
+  }
+
+  function removeTarget(target: string) {
+    setNewTargets((prev) => prev.filter((item) => item !== target));
+  }
+
+  // Resolve one free-text target into a company+scope (id), or null.
+  async function resolveTargetCompany(target: string): Promise<number | null> {
+    // Parse: strip scheme, extract hostname or IP
+    let hostname = target;
+    try {
+      if (!hostname.includes("://")) hostname = `https://${hostname}`;
+      hostname = new URL(hostname).hostname;
+    } catch {
+      /* not a URL — treat as bare hostname/IP */
+    }
+    const isIP = /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname);
+    const scope = isIP
+      ? [{ kind: "ip" as const, value: hostname }]
+      : [{ kind: "domain" as const, value: hostname }];
+    const company = await http<Company>("/companies", {
+      method: "POST",
+      body: JSON.stringify({ name: hostname, scope }),
+    });
+    return company?.id ?? null;
+  }
+
   async function launchMission() {
     if (!goal.trim()) {
       toast.error(t("validateGoal"));
@@ -188,6 +239,16 @@ export default function OperatorPage() {
     }
     setLaunching(true);
     try {
+      // Resolve every free-text target chip into a company+scope first.
+      let finalCompanyIDs = [...companyIDs];
+      for (const target of newTargets) {
+        const id = await resolveTargetCompany(target);
+        if (id) finalCompanyIDs = [...finalCompanyIDs, id];
+      }
+      if (newTargets.length > 0) {
+        // refresh the picker so the new companies appear
+        api.companies().then(setCompanies).catch(() => {});
+      }
       // Body follows the /tasks POST conventions of api.createTask (snake_case,
       // timeout in seconds) but goes through the exported http() directly: the
       // optional skills_mode/allowed_skills fields are being added to
@@ -198,7 +259,7 @@ export default function OperatorPage() {
       // description is normalized server-side, so the minimal body is safe.
       const body: Record<string, unknown> = {
         goal: goal.trim(),
-        company_ids: companyIDs,
+        company_ids: finalCompanyIDs,
         timeout_seconds: Math.max(1, Math.floor(power.minutes)) * 60,
         skills_mode: power.mode,
         seed_first_intent: true,
@@ -208,6 +269,7 @@ export default function OperatorPage() {
       toast.success(t("createdToast"));
       setGoal("");
       setCompanyIDs([]);
+      setNewTargets([]);
       setPower(DEFAULT_POWER_SELECTION);
       setReloadToken((n) => n + 1);
     } catch (e) {
@@ -293,9 +355,40 @@ export default function OperatorPage() {
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="mission-companies">{t("targetLabel")}</Label>
+            <Label htmlFor="mission-new-target">{t("targetLabel")}</Label>
+            <Input
+              id="mission-new-target"
+              placeholder={t("newTargetPlaceholder")}
+              value={targetDraft}
+              onChange={(e) => setTargetDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === "," || e.key === " ") {
+                  if (addTargetsFromDraft() > 0) e.preventDefault();
+                }
+              }}
+            />
+            {newTargets.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {newTargets.map((target) => (
+                  <span
+                    key={target}
+                    className="bg-muted inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs"
+                  >
+                    {target}
+                    <button
+                      type="button"
+                      className="text-muted-foreground hover:text-foreground"
+                      aria-label={t("newTargetRemove")}
+                      onClick={() => removeTarget(target)}
+                    >
+                      <XIcon className="size-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
             <CompanyPicker companies={companies} value={companyIDs} onValueChange={setCompanyIDs} />
-            <p className="text-muted-foreground text-xs">{t("targetHint")}</p>
+            <p className="text-muted-foreground text-xs">{t("newTargetHint")}</p>
           </div>
           <PowerSelector value={power} onChange={setPower} disabled={launching} />
           <div className="flex justify-end">
