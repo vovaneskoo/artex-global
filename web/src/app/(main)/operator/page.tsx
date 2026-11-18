@@ -4,7 +4,7 @@ import * as React from "react";
 
 import Link from "next/link";
 
-import { ActivityIcon, ArrowUpRightIcon, BugIcon, RocketIcon, XIcon } from "lucide-react";
+import { ActivityIcon, ArrowUpRightIcon, BugIcon, CoinsIcon, RocketIcon, XIcon } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
@@ -186,6 +186,22 @@ export default function OperatorPage() {
       .then(setCompanies)
       .catch(() => setCompanies([]));
   }, []);
+
+  // API spend per profile (llm_usage ledger): stacked share bar + per-model rows.
+  type UsageRow = {
+    profile_name: string;
+    calls: number;
+    tasks: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens: number;
+  };
+  const [apiUsage, setApiUsage] = React.useState<UsageRow[]>([]);
+  React.useEffect(() => {
+    http<{ by_profile?: UsageRow[] }>("/tokens/usage")
+      .then((d) => setApiUsage(d.by_profile ?? []))
+      .catch(() => setApiUsage([]));
+  }, [reloadToken]);
 
   function looksLikeTarget(token: string): boolean {
     if (/^\d{1,3}(\.\d{1,3}){3}$/.test(token)) return true; // bare IPv4
