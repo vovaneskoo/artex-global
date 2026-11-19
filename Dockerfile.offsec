@@ -104,7 +104,8 @@ WORKDIR /app
 COPY dist/${TARGETARCH}/artex /app/artex
 COPY start.sh /app/start.sh
 COPY scripts/tool-versions.sh /opt/tool-versions.sh
-RUN chmod +x /app/artex /app/start.sh /opt/tool-versions.sh
+COPY scripts/osint/recon.sh /opt/recon.sh
+RUN chmod +x /app/artex /app/start.sh /opt/tool-versions.sh /opt/recon.sh
 COPY skills/ /app/skills/
 
 RUN useradd -m -s /bin/bash artex \

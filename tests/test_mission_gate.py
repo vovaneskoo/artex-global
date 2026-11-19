@@ -141,6 +141,14 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual([g['class'] for g in state.read(self.directory)['grants']],['target','osint'])
         self.c.down()
 
+    def test_osint_class_is_web_and_dns_only(self):
+        self.start()
+        self.c.add('osint',['198.51.100.7'])
+        rules=[r for r in self.c.tables['v4']['OUTPUT']['rules'] if any('osint' in t for t in r)]
+        self.assertEqual(len(rules),4)
+        self.assertTrue(all(any('--dport' in r and p in r for p in ('443','53','853')) for r in rules))
+        self.c.down()
+
     def test_remove_unknown_is_an_error(self):
         self.start()
         with self.assertRaises(ControlError): self.c.remove('feed',['203.0.113.1'])

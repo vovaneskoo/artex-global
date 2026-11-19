@@ -141,7 +141,12 @@ class Controller:
             if cls == 'callback':
                 return [addr + ['-p', 'tcp'] + comment + ['-j', 'ACCEPT']]
             return [addr + comment + ['-j', 'ACCEPT']]
-        if cls == 'oast':
+        if cls in ('oast', 'osint'):
+            if cls == 'osint':
+                return [addr + ['-p', 'tcp', '--dport', '443'] + comment + ['-j', 'ACCEPT'],
+                        addr + ['-p', 'tcp', '--dport', '53'] + comment + ['-j', 'ACCEPT'],
+                        addr + ['-p', 'udp', '--dport', '53'] + comment + ['-j', 'ACCEPT'],
+                        addr + ['-p', 'tcp', '--dport', '853'] + comment + ['-j', 'ACCEPT']]
             return [addr + ['-p', 'tcp', '--dport', '443'] + comment + ['-j', 'ACCEPT'],
                     addr + ['-p', 'udp', '--dport', '53'] + comment + ['-j', 'ACCEPT']]
         return [addr + ['-p', 'tcp', '-m', 'multiport', '--dports', '22,80,443'] + comment + ['-j', 'ACCEPT']]
