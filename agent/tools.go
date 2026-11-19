@@ -1029,6 +1029,12 @@ type intentItem struct {
 // 约束：意图只能锚在已确认知识上——每个 parent_id 必须是已存在的 fact/finding
 // 节点（不能挂在别的意图/目标/提示上）。顶层全新方向留空 parent_ids，兜底连 origin fact。
 // 这样"每个意图都连到 fact 节点、且是发现驱动而非凭空规划"从创建路径上被强制。
+// exhaustedSiblingCap is how many exhausted intents one confirmed-fact anchor may
+// accumulate before add_intent refuses further intents derived from it. Two is
+// "tried the same edge twice with full budget" — enough signal that the edge is
+// spent; the planner is steered to a different anchor or to wrap-up instead.
+const exhaustedSiblingCap = 2
+
 func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 	if strings.TrimSpace(it.Summary) == "" {
 		return 0, fmt.Errorf("summary 不能为空")
@@ -1042,6 +1048,12 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 		}
 		if n.Kind != db.KindFact && n.Kind != db.KindFinding {
 			return 0, fmt.Errorf("parent_id %d 是 %q 节点，不能作为意图锚点：意图只能锚在已确认的【事实(fact)/发现(finding)】上，不能挂在意图/目标/提示上；顶层全新方向请留空 parent_ids", pidv, n.Kind)
+		}
+		// 已耗尽边缘守卫:同一锚点上已有两条意图以 exhausted 收场 → 这个方向已被
+		// 试尽,再派第三条大概率还是同一件事换措辞(重复烧预算)。拒绝并引导规划者
+		// 换角度/换锚点,或直接判定目标状态收尾。
+		if n, err := t.ts.ExhaustedIntentChildren(pidv); err == nil && n >= exhaustedSiblingCap {
+			return 0, fmt.Errorf("锚点 %d 上已有 %d 条以 exhausted 收场的意图——这个方向已经试尽,不要再从它派生同类意图:换一个未试过的锚点或角度,或评估目标是否已可判定并收尾", pidv, n)
 		}
 	}
 	priority := it.Priority

@@ -263,6 +263,21 @@ ON CONFLICT (exploration_id, src_id, rel, dst_id) DO NOTHING`, s.expID, from, re
 	return err
 }
 
+// ExhaustedIntentChildren counts intent nodes linked derived_from FROM parentID
+// that ended in state 'exhausted'. The planner's add_intent guard uses it to stop
+// re-driving a spent edge: if two intents anchored on the same confirmed fact
+// already ran out of budget, a third from the same anchor is almost always the
+// same "final attempt" again (bench night 2026-11-18: #1083 → #1086 burned a
+// double worker budget on one edge).
+func (s *ExplorationStore) ExhaustedIntentChildren(parentID int64) (int, error) {
+	var n int
+	err := s.db.QueryRow(`
+SELECT count(*) FROM exploration_edges e
+JOIN exploration_nodes n ON n.id = e.dst_id AND n.kind='intent' AND n.state='exhausted'
+WHERE e.exploration_id=$1 AND e.src_id=$2 AND e.rel=$3`, s.expID, parentID, RelDerivedFrom).Scan(&n)
+	return n, err
+}
+
 // SetNodeState updates any node's state (never deletes). content_version bumps
 // so a folded member's state flip invalidates its digest's cached body (§5.3).
 func (s *ExplorationStore) SetNodeState(id int64, state string) error {
