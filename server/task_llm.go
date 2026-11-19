@@ -99,6 +99,45 @@ type taskLLMStreamHooks struct {
 	current    func() (taskLLMSelection, error)
 	exhaust    func(taskLLMSelection, error) (db.TaskLLMTransition, error)
 	transition func(taskLLMSelection, db.TaskLLMTransition, error)
+	// trip/pass feed TRANSIENT failures into the process-wide circuit-breaker
+	// registry (llmpool.Registry). The pool path always did this; the task chain
+	// path used to act on quota errors only, so a dead endpoint (dial refused /
+	// timeouts) never opened the breaker and the task hammered it for hours
+	// (bench night 2026-11-18: 64 consecutive errors on local-qwen-fallback,
+	// 4h of zero progress). trip returns true when it recorded the failure.
+	trip func(selection taskLLMSelection, cause error) bool
+	pass func(selection taskLLMSelection)
+}
+
+// chainServeProfile picks the profile a call should run on: the task's active
+// chain member unless its circuit breaker is open, in which case the first
+// breaker-closed member AFTER it in chain order. A quota-advanced position is
+// never rewound (those members stay exhausted in the DB); a cooling profile is
+// skipped only for its cooldown window, after which the chain returns to the
+// persisted active. Falls back to active when nothing forward is usable — the
+// previous behavior — instead of inventing a new failure mode.
+func (s *Server) chainServeProfile(pt *db.Task, active int64) int64 {
+	if s.llmHealth == nil || active == 0 || !s.llmHealth.IsOpen(active) {
+		return active
+	}
+	ids := pt.LLMProfileIDs
+	start := -1
+	for i, id := range ids {
+		if id == active {
+			start = i
+			break
+		}
+	}
+	for i := start + 1; i < len(ids); i++ {
+		id := ids[i]
+		if id == 0 || s.llmHealth.IsOpen(id) {
+			continue
+		}
+		if _, _, ok := s.providerForProfile(id); ok {
+			return id
+		}
+	}
+	return active
 }
 
 // current resolves the provider this role runs on, by precedence:
@@ -130,7 +169,10 @@ func (r *taskLLMRuntime) current() (taskLLMSelection, error) {
 		if pt.ActiveLLMProfileID == nil {
 			return sel, &taskLLMError{taskID: r.taskID, chainExhausted: true, cause: errors.New("all selected profiles are quota exhausted")}
 		}
-		sel.profileID = *pt.ActiveLLMProfileID
+		// 熔断感知:active 在冷却期(连续瞬时失败,见 trip/pass hooks)时由链上其后
+		// 第一个健康成员临时顶班——只影响本次选人,不动持久 failover 状态(额度
+		// 推进仍只走 MarkTaskLLMProfileQuotaExhaustedAtRevision)。
+		sel.profileID = r.s.chainServeProfile(pt, *pt.ActiveLLMProfileID)
 		prov, cfg, ok := r.s.providerForProfile(sel.profileID)
 		if !ok {
 			return sel, fmt.Errorf("LLM profile #%d is missing or invalid", sel.profileID)
@@ -216,6 +258,22 @@ func (r *taskLLMRuntime) streamHooks() taskLLMStreamHooks {
 		transition: func(selection taskLLMSelection, transition db.TaskLLMTransition, cause error) {
 			r.s.emitTaskLLMTransition(selection.task, transition, cause)
 		},
+		trip: func(selection taskLLMSelection, cause error) bool {
+			if selection.profileID == 0 || r.s.llmHealth == nil || cause == nil {
+				return false
+			}
+			if r.s.llmHealth.Trip(selection.profileID, cause.Error(), false) {
+				log.Printf("[task-llm] task %s profile #%d 熔断开启(连续瞬时失败),冷却期内换链上下一员: %v",
+					r.taskID, selection.profileID, cause)
+			}
+			return true
+		},
+		pass: func(selection taskLLMSelection) {
+			if selection.profileID == 0 || r.s.llmHealth == nil {
+				return
+			}
+			r.s.llmHealth.Pass(selection.profileID)
+		},
 	}
 }
 
@@ -264,10 +322,18 @@ func completeTaskLLM(ctx context.Context, taskID string, req llm.CompletionReque
 			break
 		}
 		if callErr == nil {
+			if hooks.pass != nil {
+				hooks.pass(selection)
+			}
 			return msg, sr, usage, nil
 		}
 		// profileID=0: 显式链已被清空;非额度错误:透传。二者都不改任务 failover 状态。
 		if selection.profileID == 0 || !isQuotaExhaustedError(callErr) {
+			// 瞬时失败(网络/超时/EOF)熬过了同 provider 重试仍失败 → 记入熔断器;
+			// 连续数次后 current() 会在冷却期内跳到链上下一员,任务不再陪死端点耗着。
+			if selection.profileID != 0 && isRetryableStreamError(callErr) && hooks.trip != nil {
+				hooks.trip(selection, callErr)
+			}
 			return llm.Message{}, "", llm.Usage{}, callErr
 		}
 		transition, markErr := hooks.exhaust(selection, callErr)
@@ -338,6 +404,9 @@ func streamTaskLLM(ctx context.Context, taskID string, req llm.CompletionRequest
 				break
 			}
 			if streamErr == nil {
+				if hooks.pass != nil {
+					hooks.pass(selection)
+				}
 				for _, buffered := range pending {
 					if !yield(buffered, nil) {
 						return
@@ -349,6 +418,11 @@ func streamTaskLLM(ctx context.Context, taskID string, req llm.CompletionRequest
 			// bundle was still in use. Agent/global fallback errors follow the legacy
 			// behavior and never mutate task failover state.
 			if selection.profileID == 0 || !isQuotaExhaustedError(streamErr) {
+				// 同 Complete:瞬时失败(含 committed 后的中途断流)计入熔断器——
+				// provider 侧确实是抖了,下一轮调用 current() 才有依据换人。
+				if selection.profileID != 0 && isRetryableStreamError(streamErr) && hooks.trip != nil {
+					hooks.trip(selection, streamErr)
+				}
 				for _, buffered := range pending {
 					if !yield(buffered, nil) {
 						return
