@@ -3812,7 +3812,10 @@
     "coverage": "Покрытие",
     "untested": "Не протестировано",
     "suggestions": "Рекомендации",
-    "generatedAt": "Сформировано: {time}"
+    "generatedAt": "Сформировано: {time}",
+    "launch": "Запустить как миссию",
+    "launching": "Запускаю…",
+    "launched": "Миссия #{id} создана"
   },
   "operatorPage": {
     "newMission": "Новая миссия",

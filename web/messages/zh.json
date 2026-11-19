@@ -3812,7 +3812,10 @@
     "coverage": "Coverage",
     "untested": "Untested",
     "suggestions": "Suggestions",
-    "generatedAt": "Generated: {time}"
+    "generatedAt": "Generated: {time}",
+    "launch": "Run as mission",
+    "launching": "Launching…",
+    "launched": "Mission #{id} created"
   },
   "operatorPage": {
     "newMission": "New mission",
