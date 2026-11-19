@@ -41,13 +41,27 @@ interface TaskInsights {
   generatedAt: string | null;
 }
 
+// The server's untested list moved from plain strings to asset objects
+// ({id, type, label}) with the coverage wave; the card chips render strings,
+// so normalize both shapes (rendering an object child would crash the whole
+// tab — found live 2026-11-19: Обзор threw "Objects are not valid as a React
+// child" whenever a terminal task had untested assets).
+function untestedChip(u: unknown): string {
+  if (typeof u === "string") return u;
+  if (u && typeof u === "object") {
+    const label = (u as { label?: unknown }).label;
+    if (typeof label === "string") return label;
+  }
+  return "";
+}
+
 function normalizeInsights(body: TaskInsightsResponse): TaskInsights {
   const covUntested = body.coverage?.untested;
   const untestedSource = Array.isArray(body.untested) ? body.untested : covUntested;
   return {
     coverageEnabled: !!body.coverage?.enabled,
     coveragePct: typeof body.coverage?.pct === "number" ? body.coverage.pct : null,
-    untested: Array.isArray(untestedSource) ? untestedSource : [],
+    untested: Array.isArray(untestedSource) ? untestedSource.map(untestedChip).filter(Boolean) : [],
     suggestions: Array.isArray(body.suggestions)
       ? body.suggestions.filter((s) => typeof s === "string" && s.trim())
       : [],
