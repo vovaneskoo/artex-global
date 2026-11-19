@@ -256,6 +256,9 @@ func isAlnumByte(c byte) bool {
 type ScopeAllowList struct {
 	Nets    []*net.IPNet
 	Domains []string
+	// Infra holds infrastructure hostnames the box itself needs (LLM relay,
+	// tunnel/callback providers, OSINT feeds). They never count as targets.
+	Infra []string
 }
 
 // alwaysAllowedNets are unconditionally permitted: the box's own infrastructure
@@ -300,7 +303,7 @@ func checkScopeTargets(targets []scopeTarget, list *ScopeAllowList) (ok bool, de
 		if t.host == "localhost" {
 			continue
 		}
-		if matchAllowedDomain(list.Domains, t.host) {
+		if matchAllowedDomain(list.Domains, t.host) || matchAllowedDomain(list.Infra, t.host) {
 			continue
 		}
 		return false, t.host
@@ -472,8 +475,11 @@ func (s *dbScopeSource) load(taskID int64) (*ScopeAllowList, error) {
 		switch ts.Kind {
 		case "root_domain", "subdomain":
 			addDomain(ts.Domain)
-		case "ip", "cidr":
+		case "ip", "cidr", "asn":
 			addNet(ts.Net)
+		case "infra":
+			addDomain(ts.Domain)
+			list.Infra = append(list.Infra, strings.ToLower(strings.TrimSuffix(strings.TrimSpace(ts.Domain), ".")))
 		case "company":
 			if ts.CompanyID == nil || *ts.CompanyID <= 0 {
 				continue

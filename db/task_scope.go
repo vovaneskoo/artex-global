@@ -190,6 +190,21 @@ func (s *AssetStore) AddAgentScope(taskID int64, kind, value, reason, source str
 			return ts, fmt.Errorf("无效子域: %s", value)
 		}
 		ts.Domain = d
+	case "infra":
+		d := DomainKey(stripHostPort(value))
+		if d == "" {
+			return ts, fmt.Errorf("无效 infra 域: %s", value)
+		}
+		ts.Domain = d
+	case "asn":
+		v := value
+		if !strings.Contains(v, "/") {
+			v = ipToHostCIDR(stripHostPort(v))
+		}
+		if _, _, err := net.ParseCIDR(v); err != nil {
+			return ts, fmt.Errorf("无效 asn 网段: %s", value)
+		}
+		ts.Net = v
 	case "ip", "cidr":
 		v := value
 		if !strings.Contains(v, "/") {
@@ -212,7 +227,7 @@ func (s *AssetStore) AddAgentScope(taskID int64, kind, value, reason, source str
 		}
 		ts.Value = parsed.Value
 	default:
-		return ts, fmt.Errorf("不支持的 kind: %s（company/root_domain/subdomain/ip/cidr/icp/keyword）", kind)
+		return ts, fmt.Errorf("不支持的 kind: %s（company/root_domain/subdomain/infra/ip/cidr/asn/icp/keyword）", kind)
 	}
 	if err := s.upsertTaskScope(ts); err != nil {
 		return ts, err

@@ -111,6 +111,7 @@ func TestCheckScopeTargetsVerdict(t *testing.T) {
 	list := &ScopeAllowList{
 		Nets:    []*net.IPNet{parseNet(t, "192.0.2.0/24")},
 		Domains: []string{"example.com"},
+		Infra:   []string{"bore.pub", "relay.internal"},
 	}
 	for _, tc := range []struct {
 		host  string
@@ -131,6 +132,10 @@ func TestCheckScopeTargetsVerdict(t *testing.T) {
 		{"notexample.com", false, false},    // suffix is not a label boundary
 		{"evil.com", false, false},          // out of scope
 		{"localhost", false, true},          // box infra by name
+		{"bore.pub", false, true},           // callback provider: infra, not a target
+		{"x.serveo.net", false, false},      // infra list is host-scoped, not wildcard
+		{"relay.internal", false, true},     // LLM relay infra
+		{"notbore.pub", false, false},       // suffix boundary respected
 	} {
 		ok, denied := checkScopeTargets([]scopeTarget{{host: tc.host, isIP: tc.isIP}}, list)
 		if ok != tc.allow {
