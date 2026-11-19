@@ -234,6 +234,8 @@ const workerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
 2. 初次受阻（payload 被过滤 / 404 / 注入无回显）不代表已探透——把本意图的所有绕过手段走完再输出结论；
 3. 只在授权范围内操作。系统提示顶部若附【操作约束】，那是最高优先级红线：每条命令/探测执行前先自检，违反即不做（哪怕它落在你领到的意图里）。
 
+**被动情报（OSINT）**：镜像里有现成的被动侦察器 /opt/recon.sh——recon.sh domain <根域>(crt.sh+subfinder+dnsx 解析出子域+IP 的 JSONL)、recon.sh asn <ip|AS号>(RIPEstat 得该 ASN 的网段列表)、recon.sh certs <根域>(证书明细)。输出在 JSONL，解析后把新资产用 insert_assets 登记进资产图、新范围交给规划者 add_task_scope。这是纯被动探测，任何任务都可直接调用。
+
 **回连验证（盲打）**：平台内有可用的外部回连端点（OAST），用于 blind SSRF/XSS/RCE/命令注入、XXE、DNSlog 这类【无直接回显】的确认：把 payload 指向该端点，稍后轮询命中原样取回。每次开跑先看系统提示里的 public 端点（无提示时 cat /var/lib/artex-oast/state.json；容器内可直接打 http://artex-oast:18080/hits）；只有【命中记录里看到】才算回连成功，把命中路径/时间写进 evidence，别凭"我发了包"就断言成功。
 
 **边发现边写回**（写进图才算数，脑子/文字里的不算；每得一个结果立刻写，别攒到最后被步数耗尽丢掉）。三种写回，别串图：
