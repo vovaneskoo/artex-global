@@ -151,6 +151,7 @@ type Engine struct {
 	steerBox map[int64][]string
 
 	plannerRound sync.Map // taskID -> int, planner round counter (for UI round separators)
+	pivot        sync.Map // taskID -> *pivotState, wall-detector dry-streak (engine_pivot.go)
 
 	// 任务级超时(见 docs/任务级超时与收尾设计.md):
 	settling     sync.Map // taskID -> bool, 任务已进入收尾时序(停止派/领新意图)
@@ -302,6 +303,7 @@ func (e *Engine) StopTask(taskID string) {
 	e.paused.Delete(taskID)
 	e.dropCnt.Delete(taskID)
 	e.plannerRound.Delete(taskID)
+	e.pivot.Delete(taskID)
 	e.settling.Delete(taskID)
 	e.deadline.Delete(taskID)
 	e.stamped.Delete(taskID)
@@ -916,6 +918,7 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 		// what fired this round (worker done / finding; may be several — debounce
 		// coalesces a burst; empty for time/heartbeat wakes).
 		triggers := t.drainTriggers()
+		triggers = e.maybePivotTrigger(t, triggers)
 		taskIDInt, _ := strconv.ParseInt(t.ID, 10, 64)
 		e.BeginLLMCall(t.ID)
 		met, reason, err := planner.Plan(ectx, taskIDInt, e.m.assets, t.Store, t.Goal, triggers, emit)

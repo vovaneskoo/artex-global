@@ -141,6 +141,16 @@ func (d *DB) LatestFindingUnix(taskID int64) (int64, error) {
 	return ts.Int64, nil
 }
 
+// FindingsCount returns the number of findings recorded for a task. The engine's
+// pivot detector (server/engine_pivot.go) diffs it between planner rounds:
+// an unchanged count while workers keep finishing means the task is grinding
+// without producing — the wall signal.
+func (d *DB) FindingsCount(taskID int64) (int64, error) {
+	var n int64
+	err := d.QueryRow(`SELECT COUNT(*) FROM findings WHERE task_id=$1`, taskID).Scan(&n)
+	return n, err
+}
+
 // ListFindings returns all findings (newest first), joined with task description.
 // Kept for the dashboard's summary; the paginated 发现 page uses ListFindingsPage.
 func (d *DB) ListFindings(limit int) ([]*DBFinding, error) {

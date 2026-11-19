@@ -203,6 +203,13 @@ func renderTriggers(ts *db.ExplorationStore, evs []TriggerEvent) string {
 				sm = intentSummary(ts, ev.IntentID)
 			}
 			b.WriteString(fmt.Sprintf("\n- 意图 #%d 由用户删除，意图内容是：%s、删除原因是：%s。该意图已删除（不再执行）；请据此重新规划。", ev.IntentID, sm, ev.Detail))
+		case "pivot":
+			// 引擎碰壁检测（server/engine_pivot.go）:连续多轮意图收场而零新 finding。
+			// 规划者自己的硬底线「frontier 空 → 必须产意图」在这种时刻会退化成
+			// 「把最后一个边缘再验一遍」的意图磨坊——这里给出该时刻的正确动作。
+			b.WriteString("\n- 【碰壁信号】" + ev.Detail + "。本轮必须二选一：" +
+				"\n  a) 在任务 scope 内找一个**真正未试过**的角度派意图——未获 verdict 的资产/端点/参数（list_untested_assets、路由表、资产图）、未用过的攻击类（换 skill、换方法、换入口）；**禁止**再从已产生 exhausted/blocked 意图的锚点派生同类意图（add_intent 会直接拒绝）；" +
+				"\n  b) 若 scope 内已无未试角度——立即判定目标：已达成 → prove_goal 逐个标记；未达成但已系统性排除 → 给出最终 verdict 文档（「这条线是墙、系统性排除的过程与证据」本身就是有效结论），不再派验证性/收尾性意图。")
 		default: // "done"
 			b.WriteString(fmt.Sprintf("\n- 意图 #%d（%s）的 worker 结束，输出结论：%s", ev.IntentID, intentSummary(ts, ev.IntentID), workerOutput(ts, ev.IntentID)))
 			if fids := factIDsYielded(ts, ev.IntentID); fids != "" {
