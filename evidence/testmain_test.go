@@ -1,35 +1,29 @@
 package evidence
 
 import (
-	"context"
 	"os"
 	"testing"
 
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/testutil"
 )
 
-// Initialize an explicitly configured fresh database before taking the same
-// suite lock as db, agent and server. Hold it on one pinned connection.
+// Initialize the suite's database (disposable container by default, see
+// testutil; an explicitly exported DSN is honored) before taking the same
+// suite lock as db, agent and server. The lock is held on one pinned
+// connection so the unlock hits the same PostgreSQL session.
 func TestMain(m *testing.M) {
-	if os.Getenv("ARTEX_PG_DSN") == "" {
-		os.Exit(m.Run())
-	}
-	os.Exit(runEvidenceSuite(m))
-}
-func runEvidenceSuite(m *testing.M) int {
-	pg, err := db.Open(os.Getenv("ARTEX_PG_DSN"))
-	if err != nil {
-		panic(err)
-	}
-	defer pg.Close()
-	conn, err := pg.Conn(context.Background())
-	if err != nil {
-		panic(err)
-	}
-	defer conn.Close()
-	if _, err = conn.ExecContext(context.Background(), `SELECT pg_advisory_lock(7337741002)`); err != nil {
-		panic(err)
-	}
-	defer conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock(7337741002)`)
-	return m.Run()
+	os.Exit(testutil.RunPGSuite(m, func(dsn string) int {
+		return testutil.WithSuiteLock(dsn, func() int {
+			if dsn == "" {
+				return m.Run()
+			}
+			pg, err := db.Open(dsn)
+			if err != nil {
+				panic(err)
+			}
+			defer pg.Close()
+			return m.Run()
+		})
+	}))
 }

@@ -72,6 +72,9 @@
     "activityStream": "アクティビティストリーム",
     "ago": "{value}前",
     "all": "すべて",
+    "allProfiles": "すべてのプロファイル",
+    "approvals": "承認",
+    "approvalsWaiting": "承認待ち: {count}件",
     "assetDistribution": "資産の分布",
     "assetNodes": "資産ノード",
     "assetType": {
@@ -82,54 +85,44 @@
       "service": "サービス",
       "subdomain": "サブドメイン"
     },
-    "byType": "種類別",
     "cacheHit": "キャッシュヒット",
     "cacheHitRate": "キャッシュヒット率",
-    "captureOff": "キャプチャ オフ",
     "chartCacheRead": "キャッシュ読み取り",
     "chartInput": "入力",
     "chartOutput": "出力",
-    "colEngine": "エンジン",
     "colGoalProgress": "目標の進捗",
     "colInFlight": "処理中",
     "colLastActivity": "最終アクティビティ",
     "colStatus": "ステータス",
     "colTask": "タスク",
-    "confirmedFindings": "確認済みの脆弱性",
+    "configure": "設定する",
     "configured": "設定済み",
-    "crossTaskShared": "タスク間で共有",
-    "default": "デフォルト",
-    "eventCount": "{count}件のイベント",
+    "confirmedFindings": "確認済みの脆弱性",
+    "connectionLost": "サーバーに接続できません — 最後に取得したデータを表示しています",
     "findings": "脆弱性",
+    "inFlightCount": "実行中 {count}",
     "inputUncached": "入力（キャッシュ未ヒット）",
     "llmConfig": "LLM 設定",
-    "morePending": "ほか {count}件…",
+    "llmMissing": "LLM が未設定のため、ミッションを開始できません",
+    "newMission": "新規ミッション",
     "noActivity": "アクティビティの記録はありません",
     "noAssetData": "資産データはありません",
     "noData": "データはありません",
     "noFindings": "脆弱性はありません",
-    "noPendingIntercepts": "承認待ちのインターセプトはありません",
     "noTasks": "タスクはありません",
-    "noTrafficData": "トラフィックデータはありません",
+    "none": "なし",
     "notConfigured": "未設定",
     "off": "オフ",
-    "on": "オン",
     "output": "出力",
     "pendingApprovals": "承認待ち ({count})",
-    "range7": "7日",
     "range30": "30日",
+    "range7": "7日",
     "range90": "3か月",
-    "range180": "6か月",
-    "range365": "1年",
-    "recentRequests": "最近のリクエスト",
     "recording": "記録中",
-    "requestCount": "{count}回のリクエスト",
-    "srcNew": "計量台帳",
-    "srcOld": "アクティビティ統計",
+    "review": "確認する",
     "statDone": "完了",
     "statExplore": "探索",
     "statPaused": "一時停止",
-    "statTokenDetail": "入力 {input}（キャッシュ {cache} を含む）· 出力 {output}",
     "subtitle": "システム全体の状態 · リアルタイム更新",
     "systemStatus": "システムの状態",
     "taskCount": "{count}件のタスク",
@@ -137,16 +130,8 @@
     "title": "全体概要",
     "tokenConsumption": "LLM Token 消費量",
     "tokenUsage": "Token 使用量",
-    "tooltipNew": "新バージョン: llm_usage 計量台帳から取得し、呼び出しごとに正確で、中断された消費分も含みます。機能を有効にした以降のデータのみを集計します。",
-    "tooltipOld": "旧バージョン: activity 統計から取得し、過去のタスクも含みますが、中断された消費分は含まれず、モデル単位の正確さもありません。",
     "totalInOut": "合計（入力+出力）",
-    "totalNodes": "合計 {count}個のノード",
-    "trafficCapture": "トラフィックキャプチャ",
-    "trafficExchanges": "トラフィックのやり取り",
-    "trafficStatusCodes": "トラフィックのステータスコード",
-    "verNew": "新バージョン",
-    "verOld": "旧バージョン",
-    "viewTasks": "タスクを見る"
+    "trafficCapture": "トラフィックキャプチャ"
   },
   "header": {
     "updateBadge": "新バージョン {latest}",
@@ -157,7 +142,9 @@
   "nav": {
     "group": {
       "function": "機能",
-      "system": "システム"
+      "system": "システム",
+      "operator": "Operator",
+      "advanced": "Advanced"
     },
     "item": {
       "agents": "エージェント",
@@ -180,7 +167,8 @@
       "tasks": "タスク",
       "tools": "ツール",
       "traffic": "トラフィック",
-      "workspace": "ワークスペース"
+      "workspace": "ワークスペース",
+      "operator": "Operator"
     }
   },
   "notFound": {
@@ -684,6 +672,17 @@
           "fuzzy_url": "URL（部分一致）",
           "cidr": "CIDR 帯域"
         }
+      }
+    },
+    "budget": {
+      "title": "Budget",
+      "timeout": "Timeout",
+      "minutesShort": "min",
+      "deadline": "Deadline",
+      "remaining": "Remaining",
+      "next": {
+        "title": "Budget is over — what else to try",
+        "hint": "Untested areas and server hints for the same task."
       }
     }
   },
@@ -1481,6 +1480,14 @@
         "verification": "補足検証",
         "supporting": "補助証拠"
       }
+    },
+    "insights": {
+      "tab": "What's next",
+      "pickHint": "Pick a task to see what is worth testing next.",
+      "taskPlaceholder": "Task",
+      "tasksEmpty": "No tasks found",
+      "tasksFailed": "Failed to load the task list",
+      "tasksRetry": "Retry"
     }
   },
   "copyButton": {
@@ -2529,7 +2536,9 @@
       "save": "保存",
       "enabledToast": "同時実行制限をオンにしました。最大 {count} 件のタスクを同時に実行します",
       "disabledToast": "タスクの同時実行制限をオフにしました",
-      "saveFailed": "保存に失敗しました: {msg}"
+      "saveFailed": "保存に失敗しました: {msg}",
+      "defaultTimeoutLabel": "既定のミッション制限時間(分)",
+      "defaultTimeoutHint": "明示的な予算なしで新しいミッションを作成したときに適用されます。0 = 無制限。"
     },
     "archive": {
       "state": {
@@ -3195,6 +3204,7 @@
       "modeStandalone": "スタンドアロンプログラム",
       "changelog": "変更履歴",
       "connectError": "GitHub に接続できません: {error} 上でグローバルプロキシを設定してから、もう一度お試しください。",
+      "disabledBuild": "このビルドではセキュリティパッチによりワンクリック更新が無効になっています（更新ソースのリポジトリが削除されました）。ページからの更新はできません——ネットワークやプロキシの問題ではありません。",
       "noAsset": "{latest} には {os}/{arch} 用のリリースパッケージがなく ({asset} が見つかりません)、自動でアップデートできません。",
       "willDownloadPrefix": "ダウンロード対象: ",
       "willDownloadSize": " ({size})",
@@ -3760,5 +3770,59 @@
       "name": "脆弱性の再検証",
       "description": "脆弱性の詳細から手動で開始し、元の証拠を読み取って、独立した再検証の結論を保存します。"
     }
+  },
+  "powerSelector": {
+    "label": "Mission power",
+    "modeAria": "Power mode",
+    "mode": {
+      "recon": "Recon",
+      "standard": "Standard",
+      "full": "Full",
+      "custom": "Custom"
+    },
+    "minutesLabel": "Time budget, min",
+    "minutesHint": "How long the mission may run",
+    "skillsLabel": "Allowed skills",
+    "skillsTrigger": "Select skills",
+    "skillsCount": "{count, plural, one {# skill selected} other {# skills selected}}",
+    "skillsError": "Failed to load skills",
+    "skillsRetry": "Retry",
+    "skillsEmpty": "No skills",
+    "skillsHint": "In custom mode only the selected skills are available"
+  },
+  "insightsCard": {
+    "title": "What's next",
+    "unavailable": "Not available yet",
+    "refresh": "Refresh",
+    "coverage": "Coverage",
+    "untested": "Untested",
+    "suggestions": "Suggestions",
+    "generatedAt": "Generated: {time}",
+    "launch": "Run as mission",
+    "launching": "Launching…",
+    "launched": "Mission #{id} created"
+  },
+  "operatorPage": {
+    "newMission": "New mission",
+    "goalLabel": "Mission goal",
+    "goalPlaceholder": "Describe what to test…",
+    "targetLabel": "Target",
+    "targetHint": "Companies whose assets join the mission scope",
+    "launch": "Launch mission",
+    "launching": "Launching…",
+    "validateGoal": "Describe the mission goal",
+    "createdToast": "Mission launched",
+    "createFailed": "Failed to launch mission: {msg}",
+    "activeMissions": "Active missions",
+    "noActiveMissions": "No unfinished missions",
+    "allTasks": "All",
+    "recentFindings": "Recent findings",
+    "noFindings": "No findings yet",
+    "allFindings": "All",
+    "timeAgo": "{value} ago",
+    "newTargetLabel": "New target (URL or IP)",
+    "newTargetPlaceholder": "example.com or 1.2.3.4 — press Enter to add; multiple allowed",
+    "newTargetHint": "Type new targets — a company and scope are created on launch; subdomains of a domain are covered by its scope automatically. Existing companies below.",
+    "newTargetRemove": "Remove"
   }
 }

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+
+	"github.com/Autumn-27/artex/testutil"
 )
 
 // TestPoolProfilesOrder pins the failover chain query: keyless profiles can't
@@ -17,7 +19,11 @@ func TestPoolProfilesOrder(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): the row-deleting cleanups registered below are
+	// t.Cleanup functions and need the database open — with `defer d.Close()`
+	// they ran against a closed DB, silently failed, and leaked profile rows
+	// into every later run of the shared suite.
+	t.Cleanup(func() { _ = d.Close() })
 
 	mk := func(name string, priority int, exclude bool, key string) int64 {
 		id, err := d.SaveProfile(&LLMProfile{
@@ -27,7 +33,7 @@ func TestPoolProfilesOrder(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { d.Exec(`DELETE FROM llm_profiles WHERE id=$1`, id) })
+		t.Cleanup(func() { _, _ = d.Exec(`DELETE FROM llm_profiles WHERE id=$1`, id) })
 		return id
 	}
 	lo := mk("t-pool-lo", 1, false, "k1")
@@ -69,14 +75,24 @@ func TestConfigStores(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): the fixture restores registered below run as
+	// t.Cleanup functions, and they need the database still open — function
+	// defers would close it first.
+	t.Cleanup(func() { _ = d.Close() })
+
+	// This test flips GLOBAL fixture state (SetActiveProfile) and the cleanup
+	// below used to delete only the new row, leaving the shared database with
+	// no — or a dangling — active profile. Preserve the llm_profiles and
+	// settings tables so whatever test order runs (go test -shuffle=on), later
+	// tests find the profile/settings state this test found.
+	testutil.PreserveTable(t, d.DB, "llm_profiles")
+	testutil.PreserveTable(t, d.DB, "settings")
 
 	// LLM profile: save, active, key never serialized
 	pid, err := d.SaveProfile(&LLMProfile{Name: "t-default", Format: "openai", Model: "gpt-x", APIKey: "secret123"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Exec(`DELETE FROM llm_profiles WHERE id=$1`, pid)
 	if err := d.SetActiveProfile(pid); err != nil {
 		t.Fatal(err)
 	}

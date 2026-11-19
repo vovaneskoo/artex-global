@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -57,6 +58,11 @@ const (
 	errCreateTaskCategoryInvalid = "작업 분류를 찾을 수 없거나 올바르지 않습니다"
 	errCreateTaskCompanyInvalid  = "연결 기업을 찾을 수 없거나 올바르지 않습니다"
 
+	// 스킬 모드(skills_mode) 검증 — 모드 값·custom 전용 목록·목록 길이
+	errCreateTaskSkillsModeInvalid = "스킬 모드가 올바르지 않습니다(비워 두거나 recon·standard·full·custom 중 하나여야 합니다)"
+	errCreateTaskSkillsCustomOnly  = "스킬 목록은 스킬 모드가 custom일 때만 지정할 수 있습니다"
+	errCreateTaskSkillsLimit       = "스킬 목록은 최대 %d개까지 지정할 수 있습니다"
+
 	// LLM 설정 검증 (validateTaskProfileIDs → createTask/updateTaskLLMProfiles writeErr)
 	errLLMProfileInvalid  = "LLM 설정 id가 올바르지 않거나 중복되었습니다"
 	errLLMProfileNotFound = "LLM 설정 #%d를 찾을 수 없거나 API Key가 설정되어 있지 않습니다"
@@ -71,6 +77,8 @@ const (
 	// 알림 전역 설정 (링크 기준 주소·요약 주기 — web notify.global 라벨과 동일 표기)
 	errNotifyBaseURLScheme = "링크 기준 주소는 http:// 또는 https://로 시작해야 합니다"
 	errNotifyDigestRange   = "요약 주기는 1~1440분 사이여야 합니다"
+	// 새 작업 기본 제한 시간(초). 0=무제한, 상한 7일.
+	errTaskDefaultTimeoutRange = "기본 작업 시간은 0(무제한) 또는 최대 604800초(7일)여야 합니다"
 
 	// 사용자 대면 출력 언어 설정 (putSettings)
 	errOutputLanguageInvalid = "지원하지 않는 언어입니다(en·ko·zh·es·ja 중 하나여야 합니다)"
@@ -92,6 +100,7 @@ const (
 
 	// LLM 연결 테스트·웹 검색 프로브 (writeJSON {ok:false, error:…}, 설정 화면 점검 결과)
 	errLLMTestNoAPIKey         = "API Key가 제공되지 않았습니다"
+	errLLMTestEmptyConfig      = "공급자 구성이 비어 있습니다: provider/base_url/api_key 또는 profile_id를 지정해 주세요 (비어 있으면 기본 엔드포인트로 요청이 새어나갑니다)"
 	errWebSearchProbeNoResults = "검색 결과가 0건입니다(요청이 제한되었거나 프록시가 연결되지 않았을 수 있습니다)"
 )
 
@@ -112,6 +121,9 @@ type Server struct {
 	m      *Manager
 	engine *Engine
 	ctx    context.Context
+	// cancel stops ctx (a child of the caller's context) in Close, draining the
+	// background workers New started (task-archive worker, engine task loops).
+	cancel context.CancelFunc
 
 	skillDir string // root directory for skill subdirectories
 	jwtKey   []byte // HS256 signing key loaded from / generated into dataDir/jwt.key
@@ -230,7 +242,11 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	if err != nil {
 		log.Fatalf("[auth] JWT key: %v", err)
 	}
-	s := &Server{m: m, engine: NewEngine(m), ctx: ctx, skillDir: skillDir, jwtKey: key, chatBusy: map[string]bool{},
+	// Derive a cancellable child so Close can stop the background workers New
+	// starts (task-archive worker, engine task loops) even when the caller
+	// handed us a context.Background() — which every test does.
+	ctx, cancel := context.WithCancel(ctx)
+	s := &Server{m: m, engine: NewEngine(m), ctx: ctx, cancel: cancel, skillDir: skillDir, jwtKey: key, chatBusy: map[string]bool{},
 		chatCancel: map[string]context.CancelCauseFunc{}, triggerQ: map[string][]triggeredRun{},
 		triggerActive: map[string]int{}, triggerCfg: map[string]triggerBehavior{},
 		profChatAgents: map[int64]*agent.ChatAgent{},
@@ -259,6 +275,13 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		s.cfgMu.Lock()
 		defer s.cfgMu.Unlock()
 		return s.llmOn
+	})
+	// Автопретесты (server/retest_auto.go): цикл на Engine дёргает ровно тот же
+	// серверный путь запуска ретеста, что и POST /api/exploration/findings/{id}/
+	// retests, — движку отдаётся только эта функция, без *Server.
+	s.engine.SetRetestLauncher(func(ctx context.Context, findingID int64, notes string) (bool, error) {
+		_, created, err := s.launchFindingRetest(ctx, findingID, notes)
+		return created, err
 	})
 	// Wire DB-stored prompt templates into the agents (新版方案 §3.3 / §5a). With no
 	// override row, agents keep their built-in defaults — behavior is unchanged.
@@ -330,6 +353,11 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		go s.evidenceStore().RunGC(s.ctx)
 		s.seedPythonInterpreter()     // 自定义脚本工具:开机检测 python 解释器入库(仅空时)
 		go newScheduler(s).Run(s.ctx) // P3 触发器调度(定时/finding/目标事件),仅自定义 agent
+		// Автопретесты стартуют на бутче безусловно (не только при первом Engine.Run):
+		// «пентест закончился, все задачи терминальные, ждём перепроверки через N дней» —
+		// ровно тот сценарий, ради которого планировщик существует; ленивый старт из
+		// Engine.Run остаётся как страховка для тестовых контекстов (CAS-идемпотентно).
+		s.engine.startAutoRetestLoop(s.ctx)
 		// 漏洞 IM 推送投递引擎。与 Scheduler 并列但独立：推送的实时性要求(3s)
 		// 与触发器的业务节奏不同，且两者失败互不牵连——推送卡住不该影响 agent 触发。
 		// 통합 테스트는 stepRealtime·stepDigest 를 직접 호출해 분배를 결정론적으로
@@ -367,6 +395,35 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	s.startTaskArchiveWorker()
 	s.wireInterceptReviewer() // LLM 兜底审批:未命中拦截规则的命令交给模型判定
 	return s
+}
+
+// Close cancels the server-wide context and drains the background workers New
+// started: the task-archive worker (joined via archiveWG) and, through ctx, the
+// engine's per-task planner/worker loops and deadline coordinators.
+//
+// Tests MUST call it (t.Cleanup(s.Close)) before closing the Manager — the
+// workers otherwise outlive the test, keep polling a closed database ("sql:
+// database is closed" spam) and can write into the test's temp dir while the
+// testing framework is already removing it ("TempDir RemoveAll cleanup:
+// directory not empty"). Production does not call Close today; its shutdown is
+// process exit, and the derived context makes that path bit-identical.
+func (s *Server) Close() {
+	if s == nil {
+		return
+	}
+	if s.cancel != nil {
+		s.cancel()
+	}
+	done := make(chan struct{})
+	go func() {
+		s.archiveWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		log.Printf("[server] Close: task-archive worker did not drain within 10s")
+	}
 }
 
 // Restored deadline and worker loops must inherit the same context as new tasks,
@@ -766,6 +823,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/auth/init", s.authInit)
 	mux.HandleFunc("POST /api/auth/login", s.authLogin)
 	mux.HandleFunc("POST /api/auth/change-password", s.authChangePassword)
+	// Short-lived ticket for EventSource (which cannot send Authorization headers).
+	mux.HandleFunc("POST /api/auth/sse-token", s.authSSEToken)
 
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/stats", s.stats)
@@ -811,6 +870,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/task-archives/delete/batch", s.deleteTaskArchivesBatch)
 	mux.HandleFunc("GET /api/tasks/{id}/coverage", s.taskCoverage)
 	mux.HandleFunc("GET /api/tasks/{id}/coverage-graph", s.taskCoverageGraph)
+	mux.HandleFunc("GET /api/tasks/{id}/insights", s.taskInsights)
 	mux.HandleFunc("GET /api/tasks/{id}/asset-refs", s.taskAssetRefs)
 	mux.HandleFunc("POST /api/tasks/{id}/assets", s.attachTaskAssets)
 	mux.HandleFunc("DELETE /api/tasks/{id}/assets/{assetID}", s.detachTaskAsset)
@@ -1042,10 +1102,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/intercept/judge", s.interceptSetJudgeConfig)
 	mux.HandleFunc("GET /api/intercept/judge/usage", s.interceptJudgeUsage) // 모델 판정(대체 승인) 누적 token 사용량
 
-	// /api/* goes through CORS + JWT; everything else is served by the embedded
-	// frontend (public — auth is enforced client-side and on the API). With the
-	// no-embed build the webui handler just 404s (run `next dev` separately).
-	api := cors(s.requireAuth(mux))
+	// /api/* goes through CORS → mutation guard (Origin + media type, the CSRF
+	// layer) → JWT; everything else is served by the embedded frontend (public —
+	// auth is enforced client-side and on the API). With the no-embed build the
+	// webui handler just 404s (run `next dev` separately).
+	api := cors(s.guardAPI(s.requireAuth(mux)))
 	root := http.NewServeMux()
 	root.Handle("/api/", api)
 	root.Handle("/", s.webuiHandler())
@@ -1155,26 +1216,33 @@ func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 	for _, t := range list {
 		dto := taskDTO(t, s.resolvedTaskStatus(t))
 		applyTaskArchiveBlocker(&dto, archiveBlockers)
-		metric := metrics[t.ExpID]
-		dto.Tokens = tokenTotalDTO(metric.Tokens)
-		// prefer the live in-memory heartbeat (fresher) and fall back to the
-		// persisted max activity time (survives restarts) for run-duration display.
-		dto.LastActivity = metric.LastActivity
-		if live := s.engine.LastActivity(t.ID); live > dto.LastActivity {
-			dto.LastActivity = live
-		}
-		dto.GoalsTotal = metric.Goals.Total
-		dto.GoalsMet = metric.Goals.Met
-		dto.InFlight = metric.RunningIntents
-		dto.Findings = FindingSeverityDTO{
-			Critical: metric.Findings.Critical,
-			High:     metric.Findings.High,
-			Medium:   metric.Findings.Medium,
-			Low:      metric.Findings.Low,
-		}
+		s.applyTaskMetrics(&dto, t, metrics[t.ExpID])
 		dtos = append(dtos, dto)
 	}
 	writeJSON(w, 200, map[string]any{"tasks": dtos, "active": active})
+}
+
+// applyTaskMetrics fills a TaskDTO with the DB aggregates (tokens, goals, in-flight
+// intents, findings, last activity) so every task view reports the same numbers.
+// Single-task endpoints (getTask) used to skip this entirely and answered 0/0
+// tokens for a finished run — the list view had the real numbers all along.
+func (s *Server) applyTaskMetrics(dto *TaskDTO, t *Task, metric db.TaskListMetrics) {
+	dto.Tokens = tokenTotalDTO(metric.Tokens)
+	// prefer the live in-memory heartbeat (fresher) and fall back to the
+	// persisted max activity time (survives restarts) for run-duration display.
+	dto.LastActivity = metric.LastActivity
+	if live := s.engine.LastActivity(t.ID); live > dto.LastActivity {
+		dto.LastActivity = live
+	}
+	dto.GoalsTotal = metric.Goals.Total
+	dto.GoalsMet = metric.Goals.Met
+	dto.InFlight = metric.RunningIntents
+	dto.Findings = FindingSeverityDTO{
+		Critical: metric.Findings.Critical,
+		High:     metric.Findings.High,
+		Medium:   metric.Findings.Medium,
+		Low:      metric.Findings.Low,
+	}
 }
 
 func (s *Server) resolvedTaskStatus(t *Task) string {
@@ -1431,6 +1499,15 @@ func (s *Server) setLLM(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
+	// An identity-less config must be rejected outright. ConfigFrom silently
+	// defaults the provider to anthropic (claude-opus), and with the global-key
+	// fallback below an empty POST would persist an active profile the user never
+	// chose — same silent-default class the /api/llm/test guard closes.
+	if strings.TrimSpace(req.Provider) == "" && strings.TrimSpace(req.Model) == "" &&
+		strings.TrimSpace(req.BaseURL) == "" && strings.TrimSpace(req.APIKey) == "" {
+		writeErr(w, 400, "empty LLM config: provider, model, base_url or api_key is required (refusing to fall back to a default provider)")
+		return
+	}
 	cfg := agent.ConfigFrom(req.Provider, req.Model, req.BaseURL, req.APIKey, req.Proxy)
 	cfg.RatePerSecond, cfg.RatePerMinute = req.RatePerSecond, req.RatePerMinute
 	cfg.ThinkingType = req.ThinkingType
@@ -1490,6 +1567,13 @@ func (s *Server) testLLM(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
+	// Пустой конфиг = тест неизвестно чего: ConfigFrom молча дефолтит на
+	// anthropic-эндпоинт и уводит запрос наружу (bench 2026-10-23: тест с
+	// одним {"prompt"} ударил в api.anthropic.com). Требуем явную конфигурацию.
+	if req.Provider == "" && req.BaseURL == "" && req.APIKey == "" && req.ProfileID == nil {
+		writeErr(w, 400, trMsg(errLLMTestEmptyConfig))
+		return
+	}
 	cfg := agent.ConfigFrom(req.Provider, req.Model, req.BaseURL, req.APIKey, req.Proxy)
 	// mirror production: send the SAME thinking params so a provider that rejects the
 	// reasoning_effort/thinking field fails the test too (no false "test ok, run 400").
@@ -1516,6 +1600,18 @@ func (s *Server) testLLM(w http.ResponseWriter, r *http.Request) {
 				cfg.SessionHeaderKey = p.SessionHeaderKey
 			}
 		}
+	}
+	// Empty/incomplete config must never silently become a DEFAULT provider.
+	// ConfigFrom turns an all-empty request into anthropic/claude-opus with an
+	// empty base URL, and the key fallback below then attaches the global key —
+	// so a POST with no body worth the name dials api.anthropic.com with a key
+	// minted for a different provider (caught red-handed by the bench egress
+	// relay). Require some identity: an explicit provider/model/base_url, a key,
+	// or a saved profile to test against.
+	if strings.TrimSpace(req.Provider) == "" && strings.TrimSpace(req.Model) == "" &&
+		strings.TrimSpace(req.BaseURL) == "" && strings.TrimSpace(req.APIKey) == "" && req.ProfileID == nil {
+		writeErr(w, 400, "no LLM config supplied: pass provider/model/base_url/api_key or profile_id (refusing to fall back to a default provider)")
+		return
 	}
 	if cfg.APIKey == "" {
 		s.cfgMu.Lock()
@@ -1561,13 +1657,19 @@ type createTaskReq struct {
 	LLMProfileIDs        []int64  `json:"llm_profile_ids,omitempty"`   // 有序任务级配置链;第一项初始生效
 	SourceTaskIDs        []string `json:"source_task_ids,omitempty"`   // 仅直接、只读继承的来源任务
 	CompanyIDs           []int64  `json:"company_ids,omitempty"`       // 关联企业范围并快照关联当前企业资产;不复制资产或强制生成意图
-	TimeoutSeconds       int      `json:"timeout_seconds"`             // 任务级超时(秒);0/省略=不限时
+	TimeoutSeconds       *int     `json:"timeout_seconds"`             // 任务级超时(秒);省略/null=用全局默认(默认 2h),显式 0=不限时
 	PlanHeartbeatSeconds int      `json:"plan_heartbeat_seconds"`      // planner 心跳触发间隔(秒);0/省略=默认600(10min);下限=默认=600,低于自动抬到600
 	SeedFirstIntent      *bool    `json:"seed_first_intent,omitempty"` // 创建时直接下发一条种子意图(内容=描述+目标),让 worker 免等首轮 planner 直接开跑;省略/null=默认关闭,走标准先规划再执行。显式传 true 才开(CTF 常一 work 解决时可省掉开跑前的 planner 轮)。
 	CoverageEnabled      *bool    `json:"coverage_enabled,omitempty"`  // 资产覆盖度功能;省略/null=默认开(true)。false=关闭覆盖度计算/展示/自动累积范围+隐藏 add_task_scope/list_untested_assets。company 关联不受影响。
+	SkillsMode           string   `json:"skills_mode,omitempty"`       // 任务技能功率模式;省略/''=继承 agent 可见全部技能;recon|standard|full|custom
+	AllowedSkills        []string `json:"allowed_skills,omitempty"`    // custom 模式的技能白名单;trim+去重后上限 64 个,仅 custom 模式可带
 	// InterceptRules 任务级资产拦截/允许规则(创建时录入,存 task_intercept_rules,不进全局表)。
 	InterceptRules []taskInterceptRuleReq `json:"intercept_rules,omitempty"`
 }
+
+// maxTaskAllowedSkills bounds the custom skills-mode whitelist (after trim +
+// dedup) one create-task request may carry. 可见调色板本身有限,64 个足够。
+const maxTaskAllowedSkills = 64
 
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	var req createTaskReq
@@ -1576,7 +1678,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.TrimSpace(req.Description) == "" {
-		req.Description = "未命名任务"
+		req.Description = s.defaultTaskDescription()
 	}
 	if len(req.LLMProfileIDs) == 0 && req.LLMProfileID != nil {
 		req.LLMProfileIDs = []int64{*req.LLMProfileID}
@@ -1585,8 +1687,13 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
-	if req.TimeoutSeconds < 0 {
-		req.TimeoutSeconds = 0
+	// 省略 = 用全局默认超时(默认 2h),避免一条 planner 永不判定达成的任务靠
+	// 心跳无限跑下去;显式传 0 才表示不限时。负数按 0 处理。
+	timeoutSeconds := 0
+	if req.TimeoutSeconds == nil {
+		timeoutSeconds = s.m.TaskDefaultTimeout()
+	} else if *req.TimeoutSeconds > 0 {
+		timeoutSeconds = *req.TimeoutSeconds
 	}
 	if len(req.SourceTaskIDs) > db.MaxTaskSourceCount {
 		writeErr(w, 400, fmt.Sprintf(trMsg(errCreateTaskSourceLimit), db.MaxTaskSourceCount))
@@ -1618,12 +1725,37 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errCreateTaskInterceptRules+err.Error())
 		return
 	}
+	// skills_mode/allowed_skills: 白名单只属于 custom;名字在此归一(trim+去重),
+	// db 层还会再归一一次并落库(NULL=空)。个数上限在归一后判定。
+	if !ValidSkillMode(req.SkillsMode) {
+		writeErr(w, 400, errCreateTaskSkillsModeInvalid)
+		return
+	}
+	if len(req.AllowedSkills) > 0 && req.SkillsMode != SkillModeCustom {
+		writeErr(w, 400, errCreateTaskSkillsCustomOnly)
+		return
+	}
+	allowedSkills := make([]string, 0, len(req.AllowedSkills))
+	seenSkills := map[string]bool{}
+	for _, name := range req.AllowedSkills {
+		name = strings.TrimSpace(name)
+		if name == "" || seenSkills[name] {
+			continue
+		}
+		seenSkills[name] = true
+		allowedSkills = append(allowedSkills, name)
+	}
+	if len(allowedSkills) > maxTaskAllowedSkills {
+		writeErr(w, 400, fmt.Sprintf(trMsg(errCreateTaskSkillsLimit), maxTaskAllowedSkills))
+		return
+	}
 	t, err := s.m.CreateTaskWithOptions(req.Description, req.Goal, db.TaskCreateOptions{
 		Name: strings.TrimSpace(req.Name), CategoryID: req.CategoryID,
 		SourceTaskIDs: sourceIDs, CompanyIDs: req.CompanyIDs, LLMProfileIDs: req.LLMProfileIDs,
-		TimeoutSeconds: req.TimeoutSeconds, PlanHeartbeatSeconds: req.PlanHeartbeatSeconds,
+		TimeoutSeconds: timeoutSeconds, PlanHeartbeatSeconds: req.PlanHeartbeatSeconds,
 		CoverageEnabled: req.CoverageEnabled,
-		InterceptRules:  interceptRules,
+		SkillsMode:      req.SkillsMode, AllowedSkills: allowedSkills,
+		InterceptRules: interceptRules,
 	})
 	if err != nil {
 		if errors.Is(err, db.ErrTaskCategoryInvalid) || errors.Is(err, db.ErrTaskCategoryNotFound) {
@@ -1823,7 +1955,7 @@ func (s *Server) seed(t *Task, text string) {
 // origin fact (RelDerivedFrom) so it still traces back to a fact node. Best-effort —
 // a failure just falls back to the normal planner-driven flow.
 func (s *Server) seedFirstIntent(t *Task) {
-	summary := fmt.Sprintf("完成任务目标：%s（任务：%s）", t.Goal, t.Description)
+	summary := fmt.Sprintf(s.seedIntentSummaryFmt(), t.Goal, t.Description)
 	id, err := t.Store.AddIntent(map[string]any{"summary": summary}, 8, nil, "seed")
 	if err != nil {
 		log.Printf("[seed] task %s: 下发种子意图失败: %v", t.ID, err)
@@ -1844,6 +1976,13 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 	dto := taskDTO(t, s.resolvedTaskStatus(t))
 	archiveBlockers, _ := s.m.PG().TaskArchiveBlockers()
 	applyTaskArchiveBlocker(&dto, archiveBlockers)
+	// Same aggregates the task list shows (tokens, goals, findings, last
+	// activity). Previously this endpoint returned zeroes for all of them, so a
+	// finished task polled via /api/task/{id} looked like it spent 0 tokens
+	// even while the ledger and the list view held the real numbers.
+	if metric, err := s.m.PG().TaskListMetrics(t.ExpID); err == nil {
+		s.applyTaskMetrics(&dto, t, metric)
+	}
 	writeJSON(w, 200, dto)
 }
 
@@ -2260,6 +2399,13 @@ func (s *Server) findingsExport(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	stamp := now.Format("20060102-150405")
+	// Export skeleton language: explicit ?lang= wins (report package falls back
+	// to English for unsupported codes); an absent ?lang= means the server's
+	// active output language — same rule as the task report endpoint.
+	locale := strings.TrimSpace(q.Get("lang"))
+	if locale == "" {
+		locale = s.outputLanguage()
+	}
 	setDownload := func(contentType, filename string) {
 		w.Header().Set("Content-Type", contentType)
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
@@ -2268,10 +2414,10 @@ func (s *Server) findingsExport(w http.ResponseWriter, r *http.Request) {
 	switch format {
 	case "md-single":
 		setDownload("text/markdown; charset=utf-8", "findings-"+stamp+".md")
-		_, _ = w.Write([]byte(report.FindingsMarkdown(fs, now)))
+		_, _ = w.Write([]byte(report.FindingsMarkdown(fs, now, locale)))
 	case "md-zip":
 		path := filepath.Join(stage, "findings.zip")
-		if err := buildFindingsEvidenceZip(path, fs, stage, now); err != nil {
+		if err := buildFindingsEvidenceZip(path, fs, stage, now, locale); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}
@@ -2285,7 +2431,7 @@ func (s *Server) findingsExport(w http.ResponseWriter, r *http.Request) {
 		http.ServeContent(w, r, "findings.zip", now, file)
 	case "csv":
 		setDownload("text/csv; charset=utf-8", "findings-"+stamp+".csv")
-		_, _ = w.Write(report.FindingsCSV(fs))
+		_, _ = w.Write(report.FindingsCSV(fs, locale))
 	case "json":
 		assets := s.resolveFindingAssets(fs)
 		out := make([]FindingDTO, 0, len(fs))
@@ -3416,6 +3562,8 @@ func (s *Server) settingsPayload() map[string]any {
 		"workers":                  s.m.Workers(),               // 并发工作 agent 数(默认3)；对之后启动的任务生效
 		"task_concurrency_enabled": concOn,                      // 任务并发上限开关(默认关)
 		"task_concurrency_limit":   concLimit,                   // 同时运行任务上限(开启后默认5)
+		// 新建任务未指定超时时的默认任务时长(秒);0=不限时。默认 2h。
+		"task_default_timeout_seconds": s.m.TaskDefaultTimeout(),
 		// LLM 轮询(故障转移)。默认关；开启后走全局激活配置的 agent 在当前配置不可用时
 		// 自动切到下一个配置。bind_fallback 仅在轮询开启时有意义(默认关)。
 		"llm_pool_enabled":       s.m.LLMPoolEnabled(),
@@ -3489,6 +3637,8 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		// 任务并发上限:同时「运行中」的任务数上限。关闭=不限;开启后新建任务超限则排队,有空位自动启动。
 		ConcurrencyEnabled *bool `json:"task_concurrency_enabled"`
 		ConcurrencyLimit   *int  `json:"task_concurrency_limit"`
+		// 新建任务的默认超时(秒);0=不限时。只影响之后创建的任务。
+		TaskDefaultTimeout *int `json:"task_default_timeout_seconds"`
 		// LLM 轮询(故障转移)开关 + 「绑定配置失败也兜底回轮询链」开关。两者都需要
 		// 重建 provider 链才生效，走下面的 changed → applyLLM 路径。
 		LLMPoolEnabled      *bool `json:"llm_pool_enabled"`
@@ -3600,6 +3750,17 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		// 立即协调一次:关闭时放行全部排队,调高上限时补位启动,不必等下一个 tick。
 		go s.reconcileConcurrency()
+	}
+	if req.TaskDefaultTimeout != nil {
+		v := *req.TaskDefaultTimeout
+		if v < 0 || v > maxTaskDefaultTimeoutSeconds {
+			writeErr(w, 400, errTaskDefaultTimeoutRange)
+			return
+		}
+		if err := s.m.pg.SetSetting(settingTaskDefaultTimeout, strconv.Itoa(v)); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
 	}
 	if req.PythonInterp != nil {
 		if err := s.m.pg.SetSetting(settingPythonInterp, strings.TrimSpace(*req.PythonInterp)); err != nil {
@@ -3982,25 +4143,89 @@ func (s *Server) fallbackChat(t *Task, msg string) string {
 	}
 }
 
+// getReport renders the task's deliverable report (markdown). Everything in it
+// is task-scoped: findings and facts come from the task's own exploration
+// store, asset counts from AssetStore.CountsByTypeForTask — the old handler
+// used the global QueryByType, which mixed every project's assets into the
+// report. Evidence appears as references (finding row id + triage status +
+// traffic binding count from DB.FindingMetaByNodeID, itself task_id-scoped),
+// never as raw captures. The skeleton locale follows ?lang= (en/ru/ko,
+// anything else falls back to English); without ?lang= it uses the server's
+// active output language. An empty task is a valid report: HTTP 200 with the
+// zero-findings honesty line, not an error.
 func (s *Server) getReport(w http.ResponseWriter, r *http.Request) {
-	t := s.m.ResolveTask(r.URL.Query().Get("task"))
+	q := r.URL.Query()
+	t := s.m.ResolveTask(q.Get("task"))
 	if t == nil {
 		writeErr(w, 404, "no active task")
 		return
 	}
-	findings, _ := t.Store.ListByKind(db.KindFinding, 1000) // 纯漏洞（事实是独立的 KindFact，不进报告）
-	counts := map[string]int{}
-	for _, ty := range []string{"root_domain", "ip", "subdomain", "app", "service", "endpoint"} {
-		ns, _ := s.m.Assets().QueryByType(ty, 100000, 0)
-		if len(ns) > 0 {
-			counts[ty] = len(ns)
+	taskID, err := strconv.ParseInt(t.ID, 10, 64)
+	if err != nil {
+		writeErr(w, 500, "bad task id: "+t.ID)
+		return
+	}
+	findings, err := t.Store.ListByKind(db.KindFinding, 1000) // 纯漏洞（事实是独立的 KindFact，另节呈现）
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	facts, err := t.Store.ListByKind(db.KindFact, 1000)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	counts, err := s.m.Assets().CountsByTypeForTask(taskID)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	// Evidence references, task-owned only: FindingMetaByNodeID selects
+	// findings WHERE task_id = this task, so another task's evidence rows can
+	// never be grafted onto this report. A meta failure degrades to "no
+	// evidence reference" lines (same tolerance as the findings page), it does
+	// not fail the report.
+	refs := map[int64]report.FindingRef{}
+	if meta, metaErr := s.m.pg.FindingMetaByNodeID(taskID); metaErr != nil {
+		log.Printf("[report] task=%s finding meta: %v", t.ID, metaErr)
+	} else {
+		for nodeID, m := range meta {
+			refs[nodeID] = report.FindingRef{FindingID: m.ID, Status: m.Status, Traffic: m.TrafficCount}
 		}
+	}
+	lifecycle := t.lifecycleSnapshot()
+	var createdAt, completedAt time.Time
+	if t.CreatedAt > 0 {
+		createdAt = time.Unix(t.CreatedAt, 0)
+	}
+	if lifecycle.CompletedAt > 0 {
+		completedAt = time.Unix(lifecycle.CompletedAt, 0)
+	}
+	// An explicit ?lang= wins as-is (the report package falls back to English
+	// for unsupported codes); only an absent ?lang= means "use the server's
+	// active output language".
+	locale := strings.TrimSpace(q.Get("lang"))
+	if locale == "" {
+		locale = s.outputLanguage()
 	}
 	md := report.Markdown(report.Input{
 		Title: t.Description, Goal: t.Goal, GeneratedAt: time.Now(),
-		AssetCounts: counts, Findings: findings,
+		Locale: locale,
+		TaskID:        t.ID,
+		ExplorationID: t.ExpID,
+		Status:        s.resolvedTaskStatus(t),
+		CreatedAt:     createdAt,
+		CompletedAt:   completedAt,
+		SourceTaskIDs: lifecycle.SourceTaskIDs,
+		AssetCounts:   counts,
+		Facts:         facts,
+		Findings:      findings,
+		FindingRefs:   refs,
 	})
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	if q.Get("download") == "1" {
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="report-task-%s-%s.md"`, t.ID, time.Now().Format("20060102-150405")))
+	}
 	w.WriteHeader(200)
 	_, _ = w.Write([]byte(md))
 }
@@ -4068,6 +4293,97 @@ func corsWith(allowed map[string]bool, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// --- CSRF guard (browser-origin + media type on mutating /api requests) ---
+
+// apiErrOriginBlocked / apiErrUnsupportedMedia are the guard's user-facing
+// rejections (surfaced as toasts by the UI, like every writeErr message).
+const (
+	apiErrOriginBlocked    = "허용되지 않은 출처(Origin)의 변경 요청입니다. 이 UI 를 제공한 주소에서만 변경할 수 있습니다"
+	apiErrUnsupportedMedia = "변경 요청의 Content-Type 은 application/json (또는 파일 업로드는 multipart/form-data) 이어야 합니다"
+)
+
+// guardAPI is the CSRF layer for every mutating /api request (POST/PUT/PATCH/
+// DELETE), including the /api/auth/* routes requireAuth exempts. Two checks:
+//
+//  1. Origin: a browser always sends Origin on cross-origin mutations. If it is
+//     present and is neither the request's own origin (Host, or X-Forwarded-Host
+//     behind a reverse proxy) nor on the CORS allowlist, the request is forged
+//     cross-site traffic and is rejected before any handler state changes. CORS
+//     alone is not enough here: it only hides the response from the browser —
+//     the mutation (e.g. MCP save, which spawns a stdio discovery process) still
+//     executed. Requests without Origin (curl, scripts, tests) pass: they are
+//     not browsers and cannot be cross-site forged.
+//  2. Media type: a request body Content-Type other than application/json /
+//     multipart/form-data is rejected with 415. This closes the "simple request"
+//     bypass (text/plain forms, no-cors fetch) that skips the CORS preflight
+//     while still carrying a JSON body the handlers would happily decode. An
+//     absent Content-Type is allowed so body-less DELETEs and plain curl keep
+//     working.
+//
+// Together with cookie auth being removed from extractToken (the third leg of
+// the fix: no ambient credential a forged request could ride on), mutating
+// endpoints can no longer be driven from another page on the same host — which
+// shares cookies across ports (localhost:5173 vs localhost:9999 are one site).
+func (s *Server) guardAPI(next http.Handler) http.Handler {
+	return guardAPIWith(corsAllowedOrigins(), next)
+}
+
+func guardAPIWith(allowed map[string]bool, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isMutatingMethod(r.Method) {
+			if origin := r.Header.Get("Origin"); origin != "" && !originAllowed(r, origin, allowed) {
+				log.Printf("[api] %s %s: 출처 거부 (Origin: %s, host: %s, client=%s) — 정상 클라이언트라면 %s 에 출처를 추가하세요",
+					r.Method, r.URL.Path, origin, r.Host, clientLogID(r), corsOriginsEnv)
+				writeErr(w, 403, apiErrOriginBlocked)
+				return
+			}
+			if ct := r.Header.Get("Content-Type"); ct != "" {
+				if mt, _, err := mime.ParseMediaType(ct); err != nil || (mt != "application/json" && mt != "multipart/form-data") {
+					writeErr(w, 415, apiErrUnsupportedMedia)
+					return
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func isMutatingMethod(m string) bool {
+	switch m {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	}
+	return false
+}
+
+// originAllowed reports whether origin may mutate this server: the CORS
+// allowlist (ARTEX_CORS_ORIGINS, defaulting to the `next dev` origins) or the
+// request's own origin. Same-origin is Host[:port] equality against the Origin
+// host[:port] (scheme-insensitive: a TLS-terminating proxy can make the browser
+// say https while the upstream hop is http). Proxies that rewrite Host to the
+// upstream address (nginx proxy_pass default) are covered via X-Forwarded-Host
+// (first entry only — the header is client-appendable, so it is trusted solely
+// as an ADDITIONAL allowed host, never as a replacement for Host).
+func originAllowed(r *http.Request, origin string, allowed map[string]bool) bool {
+	if allowed["*"] || allowed[strings.ToLower(origin)] {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" { // "null" / garbage origins are never same-origin
+		return false
+	}
+	if strings.EqualFold(u.Host, r.Host) {
+		return true
+	}
+	if xf := r.Header.Get("X-Forwarded-Host"); xf != "" {
+		first := strings.TrimSpace(strings.SplitN(xf, ",", 2)[0])
+		if first != "" && strings.EqualFold(u.Host, first) {
+			return true
+		}
+	}
+	return false
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

@@ -13,7 +13,9 @@ func TestCompareAndSetIntentStateAllowsSingleWinner(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) - skipping", err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 	expID, err := d.CreateExploration("intent CAS", "only one controller wins")
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +65,9 @@ func TestCancelIntentPreservesTokenMeteringWithoutDoubleCount(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) - skipping", err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 	expID, err := d.CreateExploration("cancel token rollup", "preserve consumed tokens")
 	if err != nil {
 		t.Fatal(err)
@@ -231,7 +235,9 @@ func TestCancelIntentPreservesOutputsYieldedByAnotherIntent(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) - skipping", err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 	expID, err := d.CreateExploration("shared intent output", "preserve shared facts and findings")
 	if err != nil {
 		t.Fatal(err)

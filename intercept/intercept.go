@@ -87,6 +87,14 @@ func taskInfoFromCtx(ctx context.Context) (taskID, agentName string) {
 	return "", ""
 }
 
+// TaskIDFromContext returns the task ID attached via WithTaskContext ("" when
+// absent). Exported for the guard's strict-scope enforcement (scope.go), which
+// resolves the task's allow-list from pg and cannot read the unexported info.
+func TaskIDFromContext(ctx context.Context) string {
+	id, _ := taskInfoFromCtx(ctx)
+	return id
+}
+
 func taskEmitFromCtx(ctx context.Context) func(db.Activity) {
 	f, _ := ctx.Value(taskEmitCtxKey).(func(db.Activity))
 	return f
@@ -327,9 +335,15 @@ const (
 )
 
 // Judge default values.
+//
+// defaultJudgeFailAction is deliberately fail-closed ("deny", changed from the
+// upstream "allow"): when the judge model errors or replies unparseably, an
+// UNSET fail action must block the call rather than let it through — a wrong
+// allow on an unprompted tool call cannot be undone. Only unset/invalid values
+// fall back to this default; an explicitly saved llm_judge_fail_action still wins.
 const (
 	defaultJudgeTimeoutSecs      = 15
-	defaultJudgeFailAction       = "allow"
+	defaultJudgeFailAction       = "deny"
 	defaultJudgeAskTimeoutSecs   = 300
 	defaultJudgeAskTimeoutAction = "deny"
 )

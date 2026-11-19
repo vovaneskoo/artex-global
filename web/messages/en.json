@@ -72,6 +72,9 @@
     "activityStream": "Activity stream",
     "ago": "{value} ago",
     "all": "All",
+    "allProfiles": "All profiles",
+    "approvals": "Approvals",
+    "approvalsWaiting": "Awaiting your approval: {count}",
     "assetDistribution": "Asset distribution",
     "assetNodes": "Asset nodes",
     "assetType": {
@@ -82,54 +85,44 @@
       "service": "Service",
       "subdomain": "Subdomain"
     },
-    "byType": "By type",
     "cacheHit": "Cache hit",
     "cacheHitRate": "Cache hit rate",
-    "captureOff": "Capture off",
     "chartCacheRead": "Cache read",
     "chartInput": "Input",
     "chartOutput": "Output",
-    "colEngine": "Engine",
     "colGoalProgress": "Goal progress",
     "colInFlight": "In flight",
     "colLastActivity": "Last activity",
     "colStatus": "Status",
     "colTask": "Task",
-    "confirmedFindings": "Confirmed findings",
+    "configure": "Configure",
     "configured": "Configured",
-    "crossTaskShared": "Shared across tasks",
-    "default": "Default",
-    "eventCount": "{count} events",
+    "confirmedFindings": "Confirmed findings",
+    "connectionLost": "Can't reach the server — showing the last known data",
     "findings": "Findings",
+    "inFlightCount": "{count} in flight",
     "inputUncached": "Input (uncached)",
     "llmConfig": "LLM config",
-    "morePending": "+{count} more…",
+    "llmMissing": "LLM is not configured — missions can't start",
+    "newMission": "New mission",
     "noActivity": "No activity",
     "noAssetData": "No asset data",
     "noData": "No data",
     "noFindings": "No findings",
-    "noPendingIntercepts": "No intercepts awaiting approval",
     "noTasks": "No tasks",
-    "noTrafficData": "No traffic data",
+    "none": "None",
     "notConfigured": "Not configured",
     "off": "Off",
-    "on": "On",
     "output": "Output",
     "pendingApprovals": "Pending approvals ({count})",
-    "range7": "7 days",
     "range30": "30 days",
+    "range7": "7 days",
     "range90": "3 months",
-    "range180": "6 months",
-    "range365": "1 year",
-    "recentRequests": "Recent requests",
     "recording": "Recording",
-    "requestCount": "{count} requests",
-    "srcNew": "Metering ledger",
-    "srcOld": "Activity stats",
+    "review": "Review",
     "statDone": "Done",
     "statExplore": "Exploring",
     "statPaused": "Paused",
-    "statTokenDetail": "Input {input} ({cache} cached) · output {output}",
     "subtitle": "System-wide status · live updates",
     "systemStatus": "System status",
     "taskCount": "{count} tasks",
@@ -137,16 +130,8 @@
     "title": "Overview",
     "tokenConsumption": "LLM token consumption",
     "tokenUsage": "Token usage",
-    "tooltipNew": "New version: pulled from the llm_usage metering ledger, accurate per call and including interrupted consumption. Only data from after the feature was enabled is counted.",
-    "tooltipOld": "Old version: pulled from activity stats, covering past tasks too, but it misses interrupted consumption and isn't accurate down to the model level.",
     "totalInOut": "Total (input + output)",
-    "totalNodes": "{count} nodes total",
-    "trafficCapture": "Traffic capture",
-    "trafficExchanges": "Traffic exchanges",
-    "trafficStatusCodes": "Traffic status codes",
-    "verNew": "New",
-    "verOld": "Old",
-    "viewTasks": "View tasks"
+    "trafficCapture": "Traffic capture"
   },
   "header": {
     "updateBadge": "New version {latest}",
@@ -157,7 +142,9 @@
   "nav": {
     "group": {
       "function": "Features",
-      "system": "System"
+      "system": "System",
+      "operator": "Operator",
+      "advanced": "Advanced"
     },
     "item": {
       "agents": "Agents",
@@ -180,7 +167,8 @@
       "tasks": "Tasks",
       "tools": "Tools",
       "traffic": "Traffic",
-      "workspace": "Workspace"
+      "workspace": "Workspace",
+      "operator": "Operator"
     }
   },
   "notFound": {
@@ -684,6 +672,17 @@
           "fuzzy_url": "URL (partial match)",
           "cidr": "CIDR range"
         }
+      }
+    },
+    "budget": {
+      "title": "Budget",
+      "timeout": "Timeout",
+      "minutesShort": "min",
+      "deadline": "Deadline",
+      "remaining": "Remaining",
+      "next": {
+        "title": "Budget is over — what else to try",
+        "hint": "Untested areas and server hints for the same task."
       }
     }
   },
@@ -1481,6 +1480,14 @@
         "verification": "Supplementary verification",
         "supporting": "Supporting evidence"
       }
+    },
+    "insights": {
+      "tab": "What's next",
+      "pickHint": "Pick a task to see what is worth testing next.",
+      "taskPlaceholder": "Task",
+      "tasksEmpty": "No tasks found",
+      "tasksFailed": "Failed to load the task list",
+      "tasksRetry": "Retry"
     }
   },
   "copyButton": {
@@ -2529,7 +2536,9 @@
       "save": "Save",
       "enabledToast": "Concurrency limit on. Up to {count} tasks run at the same time",
       "disabledToast": "Task concurrency limit turned off",
-      "saveFailed": "Save failed: {msg}"
+      "saveFailed": "Save failed: {msg}",
+      "defaultTimeoutLabel": "Default mission time limit (min)",
+      "defaultTimeoutHint": "Applied when a new mission is created without an explicit budget. 0 = unlimited."
     },
     "archive": {
       "state": {
@@ -3195,6 +3204,7 @@
       "modeStandalone": "Standalone program",
       "changelog": "Changelog",
       "connectError": "Can't connect to GitHub: {error} You can set the global proxy above and try again.",
+      "disabledBuild": "One-click update is disabled in this build by a security patch (the update source repository was deleted). Updating from this page is not possible — this is not a network or proxy issue.",
       "noAsset": "{latest} has no release package for {os}/{arch} ({asset} missing), so it can't be updated automatically.",
       "willDownloadPrefix": "Will download: ",
       "willDownloadSize": " ({size})",
@@ -3760,5 +3770,59 @@
       "name": "Vulnerability Retest",
       "description": "Launched manually from a finding's detail view; reads the original evidence and saves an independent retest conclusion."
     }
+  },
+  "powerSelector": {
+    "label": "Mission power",
+    "modeAria": "Power mode",
+    "mode": {
+      "recon": "Recon",
+      "standard": "Standard",
+      "full": "Full",
+      "custom": "Custom"
+    },
+    "minutesLabel": "Time budget, min",
+    "minutesHint": "How long the mission may run",
+    "skillsLabel": "Allowed skills",
+    "skillsTrigger": "Select skills",
+    "skillsCount": "{count, plural, one {# skill selected} other {# skills selected}}",
+    "skillsError": "Failed to load skills",
+    "skillsRetry": "Retry",
+    "skillsEmpty": "No skills",
+    "skillsHint": "In custom mode only the selected skills are available"
+  },
+  "insightsCard": {
+    "title": "What's next",
+    "unavailable": "Not available yet",
+    "refresh": "Refresh",
+    "coverage": "Coverage",
+    "untested": "Untested",
+    "suggestions": "Suggestions",
+    "generatedAt": "Generated: {time}",
+    "launch": "Run as mission",
+    "launching": "Launching…",
+    "launched": "Mission #{id} created"
+  },
+  "operatorPage": {
+    "newMission": "New mission",
+    "goalLabel": "Mission goal",
+    "goalPlaceholder": "Describe what to test…",
+    "targetLabel": "Target",
+    "targetHint": "Companies whose assets join the mission scope",
+    "launch": "Launch mission",
+    "launching": "Launching…",
+    "validateGoal": "Describe the mission goal",
+    "createdToast": "Mission launched",
+    "createFailed": "Failed to launch mission: {msg}",
+    "activeMissions": "Active missions",
+    "noActiveMissions": "No unfinished missions",
+    "allTasks": "All",
+    "recentFindings": "Recent findings",
+    "noFindings": "No findings yet",
+    "allFindings": "All",
+    "timeAgo": "{value} ago",
+    "newTargetLabel": "New target (URL or IP)",
+    "newTargetPlaceholder": "example.com or 1.2.3.4 — press Enter to add; multiple allowed",
+    "newTargetHint": "Type new targets — a company and scope are created on launch; subdomains of a domain are covered by its scope automatically. Existing companies below.",
+    "newTargetRemove": "Remove"
   }
 }

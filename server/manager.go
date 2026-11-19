@@ -55,16 +55,20 @@ type Task struct {
 	CompanyIDs         []int64 `json:"company_ids,omitempty"`
 	Status             string  `json:"status"` // persisted lifecycle status (done/failed/timeout 为终态；空/其它则由运行态推导)
 	// 任务级超时(见 docs/任务级超时与收尾设计.md)。DeadlineAt/FirstRunAt 为 unix 秒,0=未设/未运行。
-	TimeoutSeconds       int                    `json:"timeout_seconds"`
-	PlanHeartbeatSeconds int                    `json:"plan_heartbeat_seconds"` // planner 心跳触发间隔(秒)
-	CoverageEnabled      bool                   `json:"coverage_enabled"`       // 资产覆盖度功能开关(创建时定,默认开)
-	FirstRunAt           int64                  `json:"first_run_at,omitempty"`
-	DeadlineAt           int64                  `json:"deadline_at,omitempty"`
-	Store                *pgdb.ExplorationStore `json:"-"`
-	Guard                *guard.Guard           `json:"-"`
-	notify               chan struct{}
-	lifecycleMu          sync.RWMutex
-	llmMu                sync.RWMutex
+	TimeoutSeconds       int  `json:"timeout_seconds"`
+	PlanHeartbeatSeconds int  `json:"plan_heartbeat_seconds"` // planner 心跳触发间隔(秒)
+	CoverageEnabled      bool `json:"coverage_enabled"`       // 资产覆盖度功能开关(创建时定,默认开)
+	// SkillsMode/AllowedSkills 任务技能功率模式与 custom 白名单,创建时定、运行期不可变
+	// (同 CoverageEnabled):任务的 preset 再切一刀 agent 可见技能调色板。见 server/skills_mode.go。
+	SkillsMode    string                 `json:"skills_mode"`              // ''=继承全部;recon|standard|full|custom
+	AllowedSkills []string               `json:"allowed_skills,omitempty"` // custom 模式技能白名单;nil=未设置
+	FirstRunAt    int64                  `json:"first_run_at,omitempty"`
+	DeadlineAt    int64                  `json:"deadline_at,omitempty"`
+	Store         *pgdb.ExplorationStore `json:"-"`
+	Guard         *guard.Guard           `json:"-"`
+	notify        chan struct{}
+	lifecycleMu   sync.RWMutex
+	llmMu         sync.RWMutex
 
 	// pendingTriggers accumulates the concrete changes (worker done / finding) that
 	// fired planning rounds since the last one consumed them. The debounce coalesces
@@ -289,7 +293,37 @@ const (
 	// defaultConcurrencyLimit is the simultaneous-running-task cap when the feature
 	// is enabled but no explicit limit was saved.
 	defaultConcurrencyLimit = 5
+	// settingTaskDefaultTimeout is the mission-level time budget (seconds) applied
+	// when a new task is created without an explicit timeout_seconds. A task that
+	// never finishes on its own would otherwise run forever: 0 in the row means
+	// "unlimited". The value is per setting; "0" disables the default (unlimited)
+	// and any non-positive/invalid value falls back to defaultTaskTimeoutSeconds.
+	settingTaskDefaultTimeout = "task_default_timeout_seconds"
+	// defaultTaskTimeoutSeconds is used when the setting is unset or invalid (2h).
+	defaultTaskTimeoutSeconds = 7200
+	maxTaskDefaultTimeoutSeconds = 7 * 24 * 3600
 )
+
+// TaskDefaultTimeout returns the mission timeout applied to tasks created without
+// an explicit timeout_seconds. A stored "0" means unlimited; anything unparsable
+// falls back to the built-in 2h default.
+func (m *Manager) TaskDefaultTimeout() int {
+	if m == nil || m.pg == nil {
+		return defaultTaskTimeoutSeconds
+	}
+	v, _, err := m.pg.GetSetting(settingTaskDefaultTimeout)
+	if err != nil || strings.TrimSpace(v) == "" {
+		return defaultTaskTimeoutSeconds
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n < 0 {
+		return defaultTaskTimeoutSeconds
+	}
+	if n > maxTaskDefaultTimeoutSeconds {
+		return maxTaskDefaultTimeoutSeconds
+	}
+	return n
+}
 
 // ConcurrencyLimit returns whether the simultaneous-running-task cap is enabled and
 // its limit (default 5 when enabled but unset). limit is always >=1 when enabled.
@@ -362,7 +396,15 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	if abs, err := filepath.Abs(dir); err == nil {
 		dir = abs
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	// Everything under the data root is service-private (raw LLM transcripts,
+	// uploaded files, the traffic tree). Tighten the root and the transcript
+	// store to owner-only on every start; the traffic tree migrates itself in
+	// traffic.Open. Bytes and ownership are untouched — chmod only. See
+	// docs/privacy-map.md.
+	if err := secureLocalData(dir); err != nil {
 		return nil, err
 	}
 	dsn, source, err := pgdb.DSN()
@@ -843,7 +885,12 @@ func unixNanoOrZero(t *time.Time) int64 {
 	return t.UnixNano()
 }
 
-func taskFromPG(pt *pgdb.Task, store *pgdb.ExplorationStore, ic *intercept.Interceptor) *Task {
+func taskFromPG(pt *pgdb.Task, store *pgdb.ExplorationStore, ic *intercept.Interceptor, pg *pgdb.DB) *Task {
+	g := guard.NewWithInterceptor(ic)
+	// Strict-scope enforcement (guard/scope.go) resolves the task allow-list from
+	// pg; inert unless ARTEX_STRICT_SCOPE=1. Chat guards stay unwired on purpose:
+	// chat sessions carry no task context, so there is no scope to enforce.
+	g.SetScopeSource(guard.NewDBScopeSource(pg))
 	return &Task{
 		ID: strconv.FormatInt(pt.ID, 10), ExpID: pt.ExplorationID,
 		Name:       pt.Name,
@@ -860,8 +907,9 @@ func taskFromPG(pt *pgdb.Task, store *pgdb.ExplorationStore, ic *intercept.Inter
 		CompanyIDs:     append([]int64(nil), pt.CompanyIDs...),
 		TimeoutSeconds: pt.TimeoutSeconds, PlanHeartbeatSeconds: pt.PlanHeartbeatSeconds,
 		CoverageEnabled: pt.CoverageEnabled,
-		FirstRunAt:      unixOrZero(pt.FirstRunAt), DeadlineAt: unixOrZero(pt.DeadlineAt),
-		Store: store, Guard: guard.NewWithInterceptor(ic), notify: make(chan struct{}, 1),
+		SkillsMode:      pt.SkillsMode, AllowedSkills: append([]string(nil), pt.AllowedSkills...),
+		FirstRunAt: unixOrZero(pt.FirstRunAt), DeadlineAt: unixOrZero(pt.DeadlineAt),
+		Store: store, Guard: g, notify: make(chan struct{}, 1),
 	}
 }
 
@@ -912,7 +960,7 @@ func (m *Manager) CreateTaskWithOptions(description, goal string, opts pgdb.Task
 	if err != nil {
 		return nil, err
 	}
-	t := taskFromPG(pt, m.pg.Exploration(pt.ExplorationID), m.interceptor)
+	t := taskFromPG(pt, m.pg.Exploration(pt.ExplorationID), m.interceptor, m.pg)
 	m.mu.Lock()
 	m.tasks[t.ID] = t
 	m.active = t.ID
@@ -1111,7 +1159,7 @@ func (m *Manager) LoadExisting() []*Task {
 		if _, ok := m.tasks[id]; ok {
 			continue
 		}
-		t := taskFromPG(pt, m.pg.Exploration(pt.ExplorationID), m.interceptor)
+		t := taskFromPG(pt, m.pg.Exploration(pt.ExplorationID), m.interceptor, m.pg)
 		m.tasks[id] = t
 		loaded = append(loaded, t)
 	}

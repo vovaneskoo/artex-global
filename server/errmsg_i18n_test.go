@@ -1,6 +1,8 @@
 package server
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"unicode"
 
@@ -65,5 +67,50 @@ func TestTrMsgSwitchesLanguage(t *testing.T) {
 	const notInCatalog = "some-lower-layer-error: connection refused"
 	if got := trMsg(notInCatalog); got != notInCatalog {
 		t.Fatalf("non-catalog string must pass through unchanged, got %q", got)
+	}
+}
+
+// TestDefaultTaskDescriptionLocalized: the placeholder stored for a task
+// created without a description must follow the active output language —
+// previously it was the hardcoded Chinese "未命名任务", which leaked into the
+// operator's mission list under ru/en UI (QA finding on the operator page).
+func TestDefaultTaskDescriptionLocalized(t *testing.T) {
+	cases := map[string]string{
+		"ru": "Задача без названия",
+		"en": "Unnamed task",
+		"zh": "未命名任务",
+		"ja": "名前のないタスク",
+		"es": "Tarea sin nombre",
+		"ko": "이름 없는 작업",
+	}
+	for lang, want := range cases {
+		s := &Server{}
+		s.outputLang.Store(lang)
+		if got := s.defaultTaskDescription(); got != want {
+			t.Errorf("lang %s: defaultTaskDescription = %q, want %q", lang, got, want)
+		}
+	}
+}
+
+// TestSeedIntentSummaryFmtLocalized: the seed-intent summary template must
+// follow the active output language AND keep exactly two %s verbs in every
+// language — a missing verb would make fmt.Sprintf fail at mission creation.
+func TestSeedIntentSummaryFmtLocalized(t *testing.T) {
+	for _, lang := range []string{"ru", "en", "zh", "ja", "es", "ko"} {
+		s := &Server{}
+		s.outputLang.Store(lang)
+		tpl := s.seedIntentSummaryFmt()
+		if strings.Count(tpl, "%s") != 2 {
+			t.Errorf("lang %s: template %q must contain exactly two %%s verbs", lang, tpl)
+		}
+	}
+	s := &Server{}
+	s.outputLang.Store("ru")
+	got := fmt.Sprintf(s.seedIntentSummaryFmt(), "цель", "описание")
+	if !strings.Contains(got, "цель") || !strings.Contains(got, "описание") {
+		t.Errorf("ru template did not interpolate both fields: %q", got)
+	}
+	if strings.Contains(got, "任务") {
+		t.Errorf("ru template still contains Chinese: %q", got)
 	}
 }

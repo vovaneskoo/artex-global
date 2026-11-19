@@ -3,12 +3,31 @@ package selfupdate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
+
+// Audit patch (artex-audit 2026-10): the upstream repo Autumn-27/artex was
+// deleted after real-world abuse (Oct 2026). This mirror's one-click updater
+// still phones api.github.com/repos/Autumn-27/artex on every UI page load and,
+// if that GitHub account/repo name is ever re-registered, would fetch and
+// install attacker-controlled binaries. All remote access in this package is
+// therefore disabled unless the operator explicitly opts in with
+// ARTEX_ENABLE_SELFUPDATE=1. Local file operations (Bootstrap swap of an
+// already staged binary, Rollback) are unaffected but can never acquire new
+// code while Stage is gated.
+//
+// Exported so the HTTP layer (server/update.go) can distinguish "updates are
+// disabled in this build" from a connectivity failure: the UI must not tell
+// the operator to fix a proxy when the build itself refuses to phone home.
+var ErrDisabled = errors.New("self-update is disabled by build patch (set ARTEX_ENABLE_SELFUPDATE=1 to re-enable; update source is the deleted upstream Autumn-27/artex — do not re-enable)")
+
+func selfupdateEnabled() bool { return os.Getenv("ARTEX_ENABLE_SELFUPDATE") == "1" }
 
 // Repo 是发布源。写死而不是做成配置项：更新源可配等于给任何能改配置的人一条
 // 远程代码执行通道，对一个渗透测试平台来说这个口子开不得。
@@ -86,6 +105,9 @@ func checkURL(u *url.URL) error {
 
 // FetchLatest 查询最新正式版。
 func FetchLatest(ctx context.Context, c *http.Client) (*Release, error) {
+	if !selfupdateEnabled() {
+		return nil, ErrDisabled
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, latestURL, nil)
 	if err != nil {
 		return nil, err

@@ -214,7 +214,7 @@ func (s *taskArchiveFileStage) rollback() error {
 			errs = append(errs, err)
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(move.Source), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(move.Source), archiveDirMode); err != nil {
 			errs = append(errs, err)
 			continue
 		}
@@ -275,7 +275,7 @@ func installTaskArchiveFiles(dataDir, extractedDir, taskID string, archiveID int
 		return nil, err
 	}
 	for _, move := range sources {
-		if err := os.MkdirAll(filepath.Dir(move.Destination), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(move.Destination), archiveDirMode); err != nil {
 			_ = stage.rollback()
 			return nil, err
 		}

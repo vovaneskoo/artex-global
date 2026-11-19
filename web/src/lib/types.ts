@@ -39,6 +39,8 @@ export interface Task {
   archive_blocked_by_task_id?: string; // live direct dependent that must be archived first
   company_ids?: number[]; // associated company scopes; current company assets join the task at creation
   coverage_enabled?: boolean; // 资产覆盖度功能开关(创建时定,默认开)；false=不计算/不展示覆盖度
+  timeout_seconds?: number; // mission budget in seconds; absent = backend without budgets
+  deadline_at?: string; // RFC3339 hard deadline; absent/"" = none set
 }
 
 export interface TaskCategory {
@@ -931,6 +933,8 @@ export interface Settings {
   // 任务并发上限:同时「运行中」的任务数上限。关闭=不限;开启后新建任务超限则排队,有空位自动启动。
   task_concurrency_enabled?: boolean; // 默认 false
   task_concurrency_limit?: number; // 开启后默认 5
+  // 新建任务未指定超时时的默认任务时长(秒);0=不限时。默认 7200(2h)，最大 604800(7天)。
+  task_default_timeout_seconds?: number;
   // LLM 轮询(故障转移)。默认关；开启后「未指定模型」的 agent 在当前配置不可用
   // （余额不足/key 失效/限流/服务异常）时自动切到下一个配置。
   llm_pool_enabled?: boolean; // 默认 false
@@ -1580,6 +1584,8 @@ export interface UpdateCheck {
   rolled_back?: boolean;
   /** 查询 GitHub 失败时给出原因，此时下面的字段都不会有。 */
   error?: string;
+  /** 本构建禁用了自更新（安全补丁）：不是网络/代理问题，error 字段不会设置。 */
+  disabled?: boolean;
   latest?: string;
   notes?: string;
   html_url?: string;

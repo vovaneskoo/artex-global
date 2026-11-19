@@ -72,6 +72,9 @@
     "activityStream": "Flujo de actividad",
     "ago": "hace {value}",
     "all": "Todo",
+    "allProfiles": "Todos los perfiles",
+    "approvals": "Aprobaciones",
+    "approvalsWaiting": "Pendientes de tu aprobación: {count}",
     "assetDistribution": "Distribución de activos",
     "assetNodes": "Nodos de activos",
     "assetType": {
@@ -82,54 +85,44 @@
       "service": "Servicio",
       "subdomain": "Subdominio"
     },
-    "byType": "Por tipo",
     "cacheHit": "Acierto de caché",
     "cacheHitRate": "Tasa de aciertos de caché",
-    "captureOff": "Captura desactivada",
     "chartCacheRead": "Lectura de caché",
     "chartInput": "Entrada",
     "chartOutput": "Salida",
-    "colEngine": "Motor",
     "colGoalProgress": "Progreso del objetivo",
     "colInFlight": "En curso",
     "colLastActivity": "Última actividad",
     "colStatus": "Estado",
     "colTask": "Tarea",
-    "confirmedFindings": "Hallazgos confirmados",
+    "configure": "Configurar",
     "configured": "Configurado",
-    "crossTaskShared": "Compartido entre tareas",
-    "default": "Por defecto",
-    "eventCount": "{count} eventos",
+    "confirmedFindings": "Hallazgos confirmados",
+    "connectionLost": "No se puede conectar con el servidor: se muestran los últimos datos recibidos",
     "findings": "Hallazgos",
+    "inFlightCount": "{count} en curso",
     "inputUncached": "Entrada (sin caché)",
     "llmConfig": "Configuración de LLM",
-    "morePending": "+{count} más…",
+    "llmMissing": "El LLM no está configurado: las misiones no pueden iniciarse",
+    "newMission": "Nueva misión",
     "noActivity": "Sin actividad",
     "noAssetData": "Sin datos de activos",
     "noData": "Sin datos",
     "noFindings": "Sin hallazgos",
-    "noPendingIntercepts": "Sin intercepciones pendientes de aprobación",
     "noTasks": "Sin tareas",
-    "noTrafficData": "Sin datos de tráfico",
+    "none": "Ninguna",
     "notConfigured": "No configurado",
     "off": "Desactivado",
-    "on": "Activado",
     "output": "Salida",
     "pendingApprovals": "Aprobaciones pendientes ({count})",
-    "range7": "7 días",
     "range30": "30 días",
+    "range7": "7 días",
     "range90": "3 meses",
-    "range180": "6 meses",
-    "range365": "1 año",
-    "recentRequests": "Solicitudes recientes",
     "recording": "Grabando",
-    "requestCount": "{count} solicitudes",
-    "srcNew": "Libro de medición",
-    "srcOld": "Estadísticas de actividad",
+    "review": "Revisar",
     "statDone": "Completado",
     "statExplore": "Explorando",
     "statPaused": "En pausa",
-    "statTokenDetail": "Entrada {input} ({cache} en caché) · salida {output}",
     "subtitle": "Estado global del sistema · actualización en tiempo real",
     "systemStatus": "Estado del sistema",
     "taskCount": "{count} tareas",
@@ -137,16 +130,8 @@
     "title": "Resumen general",
     "tokenConsumption": "Consumo de tokens de LLM",
     "tokenUsage": "Uso de tokens",
-    "tooltipNew": "Versión nueva: se obtiene del libro de medición llm_usage, precisa en cada llamada e incluye el consumo interrumpido. Solo cuenta los datos posteriores a la activación de la función.",
-    "tooltipOld": "Versión antigua: se obtiene de las estadísticas de activity e incluye también las tareas pasadas, pero omite el consumo interrumpido y no es precisa hasta el nivel de modelo.",
     "totalInOut": "Total (entrada + salida)",
-    "totalNodes": "{count} nodos en total",
-    "trafficCapture": "Captura de tráfico",
-    "trafficExchanges": "Intercambios de tráfico",
-    "trafficStatusCodes": "Códigos de estado del tráfico",
-    "verNew": "Nueva",
-    "verOld": "Antigua",
-    "viewTasks": "Ver tareas"
+    "trafficCapture": "Captura de tráfico"
   },
   "header": {
     "updateBadge": "Nueva versión {latest}",
@@ -157,7 +142,9 @@
   "nav": {
     "group": {
       "function": "Funciones",
-      "system": "Sistema"
+      "system": "Sistema",
+      "operator": "Operator",
+      "advanced": "Advanced"
     },
     "item": {
       "agents": "Agentes",
@@ -180,7 +167,8 @@
       "tasks": "Tareas",
       "tools": "Herramientas",
       "traffic": "Tráfico",
-      "workspace": "Espacio de trabajo"
+      "workspace": "Espacio de trabajo",
+      "operator": "Operator"
     }
   },
   "notFound": {
@@ -684,6 +672,17 @@
           "fuzzy_url": "URL (coincidencia parcial)",
           "cidr": "Rango CIDR"
         }
+      }
+    },
+    "budget": {
+      "title": "Budget",
+      "timeout": "Timeout",
+      "minutesShort": "min",
+      "deadline": "Deadline",
+      "remaining": "Remaining",
+      "next": {
+        "title": "Budget is over — what else to try",
+        "hint": "Untested areas and server hints for the same task."
       }
     }
   },
@@ -1481,6 +1480,14 @@
         "verification": "Verificación complementaria",
         "supporting": "Evidencia de apoyo"
       }
+    },
+    "insights": {
+      "tab": "What's next",
+      "pickHint": "Pick a task to see what is worth testing next.",
+      "taskPlaceholder": "Task",
+      "tasksEmpty": "No tasks found",
+      "tasksFailed": "Failed to load the task list",
+      "tasksRetry": "Retry"
     }
   },
   "copyButton": {
@@ -2529,7 +2536,9 @@
       "save": "Guardar",
       "enabledToast": "Límite de concurrencia activado. Se ejecutan hasta {count} tareas a la vez",
       "disabledToast": "Límite de concurrencia de tareas desactivado",
-      "saveFailed": "Error al guardar: {msg}"
+      "saveFailed": "Error al guardar: {msg}",
+      "defaultTimeoutLabel": "Límite de tiempo predeterminado de la misión (min)",
+      "defaultTimeoutHint": "Se aplica cuando se crea una misión sin presupuesto explícito. 0 = ilimitado."
     },
     "archive": {
       "state": {
@@ -3195,6 +3204,7 @@
       "modeStandalone": "Programa independiente",
       "changelog": "Registro de cambios",
       "connectError": "No se puede conectar con GitHub: {error} Puede configurar el proxy global de arriba y volver a intentarlo.",
+      "disabledBuild": "La actualización con un clic está desactivada en esta compilación por un parche de seguridad (el repositorio de origen de las actualizaciones fue eliminado). No se puede actualizar desde esta página: no es un problema de red ni de proxy.",
       "noAsset": "{latest} no tiene un paquete de lanzamiento para {os}/{arch} (falta {asset}), por lo que no se puede actualizar automáticamente.",
       "willDownloadPrefix": "Se descargará: ",
       "willDownloadSize": " ({size})",
@@ -3760,5 +3770,59 @@
       "name": "Reverificación de vulnerabilidad",
       "description": "Se inicia manualmente desde el detalle de un hallazgo; lee la evidencia original y guarda una conclusión de reverificación independiente."
     }
+  },
+  "powerSelector": {
+    "label": "Mission power",
+    "modeAria": "Power mode",
+    "mode": {
+      "recon": "Recon",
+      "standard": "Standard",
+      "full": "Full",
+      "custom": "Custom"
+    },
+    "minutesLabel": "Time budget, min",
+    "minutesHint": "How long the mission may run",
+    "skillsLabel": "Allowed skills",
+    "skillsTrigger": "Select skills",
+    "skillsCount": "{count, plural, one {# skill selected} other {# skills selected}}",
+    "skillsError": "Failed to load skills",
+    "skillsRetry": "Retry",
+    "skillsEmpty": "No skills",
+    "skillsHint": "In custom mode only the selected skills are available"
+  },
+  "insightsCard": {
+    "title": "What's next",
+    "unavailable": "Not available yet",
+    "refresh": "Refresh",
+    "coverage": "Coverage",
+    "untested": "Untested",
+    "suggestions": "Suggestions",
+    "generatedAt": "Generated: {time}",
+    "launch": "Run as mission",
+    "launching": "Launching…",
+    "launched": "Mission #{id} created"
+  },
+  "operatorPage": {
+    "newMission": "New mission",
+    "goalLabel": "Mission goal",
+    "goalPlaceholder": "Describe what to test…",
+    "targetLabel": "Target",
+    "targetHint": "Companies whose assets join the mission scope",
+    "launch": "Launch mission",
+    "launching": "Launching…",
+    "validateGoal": "Describe the mission goal",
+    "createdToast": "Mission launched",
+    "createFailed": "Failed to launch mission: {msg}",
+    "activeMissions": "Active missions",
+    "noActiveMissions": "No unfinished missions",
+    "allTasks": "All",
+    "recentFindings": "Recent findings",
+    "noFindings": "No findings yet",
+    "allFindings": "All",
+    "timeAgo": "{value} ago",
+    "newTargetLabel": "New target (URL or IP)",
+    "newTargetPlaceholder": "example.com or 1.2.3.4 — press Enter to add; multiple allowed",
+    "newTargetHint": "Type new targets — a company and scope are created on launch; subdomains of a domain are covered by its scope automatically. Existing companies below.",
+    "newTargetRemove": "Remove"
   }
 }

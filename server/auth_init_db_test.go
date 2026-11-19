@@ -35,9 +35,23 @@ func newAuthTestRig(t *testing.T) *authTestRig {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
+	// Snapshot the operator password hash (the app's default identity) and
+	// restore THAT on cleanup. The old clear-both-ends version deleted the key
+	// unconditionally — on a shared/working database it would have wiped the
+	// real admin password instead of putting back what the suite found.
+	prevHash, prevOK, prevErr := d.GetSetting(authPassKey)
+	if prevErr != nil {
+		prevOK = false
+	}
 	clear := func() { _, _ = d.Exec(`DELETE FROM settings WHERE key = $1`, authPassKey) }
 	clear()
-	t.Cleanup(clear)
+	t.Cleanup(func() {
+		if prevOK {
+			_ = d.SetSetting(authPassKey, prevHash)
+			return
+		}
+		clear()
+	})
 	t.Setenv(setupTokenEnv, "")
 	t.Setenv(adminPasswordEnv, "")
 

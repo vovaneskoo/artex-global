@@ -137,6 +137,9 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
   if (r.status === 401) {
     if (typeof window !== "undefined") {
       localStorage.removeItem("artex_token");
+      // biome-ignore lint/suspicious/noDocumentCookie: 清理会话标记 cookie 和旧版 JWT cookie（迁移）。
+      document.cookie = "artex_auth=; path=/; max-age=0";
+      // biome-ignore lint/suspicious/noDocumentCookie: 见上一行。
       document.cookie = "artex_token=; path=/; max-age=0";
       window.location.href = "/login";
     }
@@ -159,22 +162,9 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
   return r.json();
 }
 
-// sseUrl builds a URL for Server-Sent Events streams.
+// SSE streams live in lib/sse.ts (short-lived ?ticket= handshake — the long-lived
+// session JWT must not travel in a URL).
 //
-// Production (static export / Docker): the Go backend serves the web UI *and* the
-// SSE streams on the same port, so we default to a same-origin (relative) URL.
-// This is what makes reverse-proxy deploys work: a page loaded from
-// https://<domain>/ connects to https://<domain>/api/..., which the proxy forwards
-// to the backend — no need to expose :8787 publicly. Hardcoding :8787 here used to
-// break exactly that (https://<domain>:8787/... is unreachable when only 443 is open).
-//
-// Dev (next dev): SSE must NOT go through the Next.js `/api` rewrite — that proxy
-// buffers the streamed response, so event frames never reach the browser (the
-// EventSource opens but receives 0 messages). So in dev only we connect straight
-// to the Go backend on :8787, whose CORS is open.
-//
-// Override either default with NEXT_PUBLIC_SSE_BASE (set it to "" to force same-origin).
-// Token is appended as ?token= because SSE can't carry cookies cross-origin.
 // mockReport returns a canned Markdown report for the demo.
 function mockReport(_task?: string): string {
   return `# ARTEX 침투 테스트 보고서: Acme Corp
@@ -198,17 +188,6 @@ function mockReport(_task?: string): string {
 > (demo) 본 보고서는 mock 데이터로 생성되었으며 화면 데모용입니다.`;
 }
 
-export function sseUrl(path: string): string {
-  const base =
-    process.env.NEXT_PUBLIC_SSE_BASE ??
-    (process.env.NODE_ENV !== "production" && typeof window !== "undefined"
-      ? `${window.location.protocol}//${window.location.hostname}:8787`
-      : "");
-  const token = getToken();
-  const sep = path.includes("?") ? "&" : "?";
-  return token ? `${base}${path}${sep}token=${encodeURIComponent(token)}` : `${base}${path}`;
-}
-
 const get = <T>(p: string) => http<T>(p);
 const post = <T>(p: string, body?: unknown) =>
   http<T>(p, { method: "POST", body: body ? JSON.stringify(body) : undefined });
@@ -222,6 +201,18 @@ const del = <T>(p: string, body?: unknown) =>
 // Go serializes nil slices as JSON null — coerce to [].
 const arr = <T>(x: T[] | null | undefined): T[] => x ?? [];
 const tq = (task?: string, sep: "?" | "&" = "?") => (task ? `${sep}task=${encodeURIComponent(task)}` : "");
+
+// reportQuery builds the /api/report query string: the task selector plus the
+// report locale (?lang=) and, for downloadReport, the attachment flag.
+// Exported for the unit test pinning the params the server handler reads.
+export const reportQuery = (task?: string, locale?: string, download = false) => {
+  const params = new URLSearchParams();
+  if (locale) params.set("lang", locale);
+  if (download) params.set("download", "1");
+  const qs = params.toString();
+  if (!qs) return tq(task);
+  return `${tq(task)}${task ? "&" : "?"}${qs}`;
+};
 
 // findingFilterParams 把发现页的筛选条件序列化成 query string。列表 / 分组 /
 // 资产树 / 导出共用同一份,新增筛选项只改这里(后端也只解析这一份)。
@@ -880,14 +871,40 @@ export const api = {
     ).then((r) => ({ ...r, deliveries: arr(r.deliveries) }));
   },
   notifyRetryDelivery: (id: number) => post<{ ok: boolean }>(`/notify/deliveries/${id}/retry`),
-  report: async (task?: string) => {
+  // task report (markdown deliverable). locale is the UI display language —
+  // the server renders the report skeleton in it (en/ru/ko; anything else
+  // falls back to English server-side). report() and downloadReport() hit the
+  // same endpoint with the same task+lang params, so the rendered tab, the
+  // copied text and the downloaded file carry the same content.
+  report: async (task?: string, locale?: string) => {
     if (MOCK) return mockReport(task);
     const token = getToken();
-    const r = await fetch(`/api/report${tq(task)}`, {
+    const r = await fetch(`/api/report${reportQuery(task, locale)}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!r.ok) throw new Error(`report: ${r.status}`);
     return r.text();
+  },
+  downloadReport: async (task?: string, locale?: string) => {
+    if (MOCK) return;
+    const token = getToken();
+    const query = reportQuery(task, locale, true);
+    const r = await fetch(`/api/report${query}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!r.ok) throw new Error(`report download: ${r.status}`);
+    const blob = await r.blob();
+    const disp = r.headers.get("Content-Disposition") ?? "";
+    const m = disp.match(/filename="?([^"]+)"?/);
+    const filename = m?.[1] ?? `report-task-${task ?? "active"}.md`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   },
   chatMentions: (kind: string, query: string, signal?: AbortSignal, cursor = "") =>
     http<{ items: ChatMention[]; next_cursor?: string }>(

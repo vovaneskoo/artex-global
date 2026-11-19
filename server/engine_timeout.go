@@ -21,6 +21,9 @@ const (
 	settleDrainGrace     = 90 * time.Second // 等在跑 worker 优雅收尾的上限;超过则硬 cancel
 	deadlinePollInterval = 2 * time.Second  // deadline 未盖章/LLM 未就绪时的轮询间隔
 	deadlineMaxSleep     = 30 * time.Second // 单次最长睡眠(便于周期复查终态)
+	// stagnationCheckInterval paces the no-new-findings wind-down check inside the
+	// coordinator loop (the check itself is one indexed MAX(created_at) per task).
+	stagnationCheckInterval = 60 * time.Second
 )
 
 // ---------- settling 状态 ----------
@@ -89,6 +92,7 @@ func (e *Engine) resetTimeoutRevival(taskID string) {
 	e.deadline.Delete(taskID)
 	e.stamped.Delete(taskID)
 	e.coordStarted.Delete(taskID)
+	e.distillDone.Delete(taskID) // 复活后的下一次终局仍可蒸馏一次
 }
 
 // stampFirstRun records first_run_at + deadline_at on the FIRST real run (LLM ready)
@@ -125,11 +129,13 @@ func (e *Engine) clockCtx(base context.Context, t *Task, final bool) context.Con
 
 // ---------- 协调器 ----------
 
-// startDeadlineCoordinator launches the per-task deadline timer once (idempotent).
-// Called from Run() and from the restart reload path, so non-active timeout tasks
-// still get settled after their deadline even without live planner/worker loops.
+// startDeadlineCoordinator launches the per-task coordinator once (idempotent).
+// It owns BOTH the absolute deadline (timeout>0 tasks) and the stagnation
+// wind-down (every task: timeout=0 missions have no wall-clock stop at all, and
+// even timeout>0 missions can dry up long before their deadline). Called from
+// Run() and from the restart reload path.
 func (e *Engine) startDeadlineCoordinator(ctx context.Context, t *Task) {
-	if t == nil || t.TimeoutSeconds <= 0 {
+	if t == nil {
 		return
 	}
 	e.deleteMu.RLock()
@@ -146,9 +152,13 @@ func (e *Engine) startDeadlineCoordinator(ctx context.Context, t *Task) {
 	runTaskRoutine(rt, func(loopCtx context.Context) { e.deadlineCoordinator(loopCtx, t) })
 }
 
-// deadlineCoordinator waits until the task's absolute deadline, then runs the settle
-// sequence. Absolute wall-clock: it keeps counting through pauses.
+// deadlineCoordinator waits until the task's absolute deadline OR until the task
+// goes stale (no new findings for the stagnation window), then runs the settle
+// sequence. The deadline keeps counting through pauses; the stagnation clock is
+// anchored to the last finding (not wall clock since start), so a paused task is
+// simply not evaluated while paused.
 func (e *Engine) deadlineCoordinator(ctx context.Context, t *Task) {
+	var lastStagCheck time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -158,9 +168,17 @@ func (e *Engine) deadlineCoordinator(ctx context.Context, t *Task) {
 		if isTerminalStatus(e.m.TaskStatus(t.ID)) {
 			return // already finished (goals met / failed) — nothing to time out
 		}
+		if time.Since(lastStagCheck) >= stagnationCheckInterval {
+			lastStagCheck = time.Now()
+			if e.stagnationSettle(ctx, t) {
+				return
+			}
+		}
 		dl := e.taskDeadline(t)
 		if dl <= 0 {
-			if sleepCtx(ctx, deadlinePollInterval) { // not yet stamped (task hasn't really run)
+			// No wall-clock deadline (timeout=0 or not yet stamped): idle at the
+			// stagnation cadence — the wind-down is the only stop left for this task.
+			if sleepCtx(ctx, stagnationCheckInterval) {
 				return
 			}
 			continue
@@ -178,6 +196,56 @@ func (e *Engine) deadlineCoordinator(ctx context.Context, t *Task) {
 		e.settleTask(ctx, t)
 		return
 	}
+}
+
+// stagnationSettle winds a task down through the ordinary settle sequence when it
+// has produced no findings for the configured window (manager.TaskStagnationWindow,
+// default 3h, 0=off). Progress signal is the newest finding row; a task with zero
+// findings is measured from its first real run (or creation), so a mission that
+// never finds anything also stops instead of idling forever. Guards:
+//   - goalless (chat-injected) tasks: lifecycle owned by the frontier drain;
+//   - paused/settling/deleting/terminal tasks: not judged stale this round.
+// Note: a task paused for longer than the window may settle soon after resume —
+// intentional (it produced nothing before pausing), and the settle's final
+// planner round still gets to declare goals met → done rather than timeout.
+func (e *Engine) stagnationSettle(ctx context.Context, t *Task) bool {
+	if e.IsPaused(t.ID) || e.isSettling(t.ID) || e.IsDeleting(t.ID) {
+		return false
+	}
+	window := e.m.TaskStagnationWindow()
+	if window <= 0 {
+		return false
+	}
+	if has, err := t.Store.HasAnyGoal(); err != nil || !has {
+		return false
+	}
+	taskNum, err := parseTaskID(t.ID)
+	if err != nil {
+		return false
+	}
+	var since time.Time
+	if unix, err := e.m.pg.LatestFindingUnix(taskNum); err != nil {
+		log.Printf("[stagnation] task %s latest-finding query failed: %v", t.ID, err)
+	} else if unix > 0 {
+		since = time.Unix(unix, 0)
+	}
+	if since.IsZero() {
+		if pt, err := e.m.pg.GetTask(taskNum); err == nil && pt != nil {
+			switch {
+			case pt.FirstRunAt != nil:
+				since = *pt.FirstRunAt
+			default:
+				since = pt.CreatedAt
+			}
+		}
+	}
+	if since.IsZero() || time.Since(since) < window {
+		return false
+	}
+	log.Printf("[stagnation] task %s 无新发现已达 %s(最近产出 %s),进入收尾时序",
+		t.ID, window, since.Format("2006-01-02 15:04:05"))
+	e.settleTask(ctx, t)
+	return true
 }
 
 // settleTask runs the ordered settle sequence once (§4 steps ①–⑥).
@@ -221,6 +289,10 @@ func (e *Engine) settleTask(ctx context.Context, t *Task) {
 		log.Printf("[deadline] task %s 落终态失败: %v", t.ID, err)
 	case won:
 		log.Printf("[deadline] task %s 收尾完成,终态=%s", t.ID, status)
+		// 终态落定 → 后台自动生成「下一步」洞察(异步不阻塞收尾;详见 insights.go)
+		e.generateTerminalInsights(t, status)
+		// 终态落定 → 后台蒸馏经验候选入队(queue-only,异步;详见 distill_auto.go)
+		e.autoDistillTerminal(t, status)
 	default:
 		log.Printf("[deadline] task %s 收尾时已是终态,保留原状态", t.ID)
 	}

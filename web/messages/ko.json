@@ -72,6 +72,9 @@
     "activityStream": "활동 흐름",
     "ago": "{value} 전",
     "all": "전체",
+    "allProfiles": "전체 프로필",
+    "approvals": "승인",
+    "approvalsWaiting": "승인 대기 중: {count}건",
     "assetDistribution": "자산 분포",
     "assetNodes": "자산 노드",
     "assetType": {
@@ -82,54 +85,44 @@
       "service": "서비스",
       "subdomain": "서브도메인"
     },
-    "byType": "유형별",
     "cacheHit": "캐시 적중",
     "cacheHitRate": "캐시 적중률",
-    "captureOff": "캡처 꺼짐",
     "chartCacheRead": "캐시 읽기",
     "chartInput": "입력",
     "chartOutput": "출력",
-    "colEngine": "엔진",
     "colGoalProgress": "목표 진행도",
     "colInFlight": "처리 중",
     "colLastActivity": "최근 활동",
     "colStatus": "상태",
     "colTask": "작업",
-    "confirmedFindings": "확인된 취약점",
+    "configure": "설정",
     "configured": "설정됨",
-    "crossTaskShared": "작업 간 공유",
-    "default": "기본",
-    "eventCount": "{count}건 이벤트",
+    "confirmedFindings": "확인된 취약점",
+    "connectionLost": "서버에 연결할 수 없습니다 — 마지막으로 받은 데이터를 표시합니다",
     "findings": "취약점",
+    "inFlightCount": "진행 중 {count}",
     "inputUncached": "입력(미적중)",
     "llmConfig": "LLM 설정",
-    "morePending": "외 {count}건…",
+    "llmMissing": "LLM이 설정되지 않아 미션을 시작할 수 없습니다",
+    "newMission": "새 미션",
     "noActivity": "활동 기록 없음",
     "noAssetData": "자산 데이터 없음",
     "noData": "데이터 없음",
     "noFindings": "취약점 없음",
-    "noPendingIntercepts": "승인 대기 중인 가로채기 없음",
     "noTasks": "작업 없음",
-    "noTrafficData": "트래픽 데이터 없음",
+    "none": "없음",
     "notConfigured": "미설정",
     "off": "꺼짐",
-    "on": "켜짐",
     "output": "출력",
     "pendingApprovals": "승인 대기 ({count})",
-    "range7": "7일",
     "range30": "30일",
+    "range7": "7일",
     "range90": "3개월",
-    "range180": "6개월",
-    "range365": "1년",
-    "recentRequests": "최근 요청",
     "recording": "기록 중",
-    "requestCount": "{count}회 요청",
-    "srcNew": "계량 원장",
-    "srcOld": "활동 통계",
+    "review": "검토",
     "statDone": "완료",
     "statExplore": "탐색",
     "statPaused": "일시정지",
-    "statTokenDetail": "입력 {input}(캐시 {cache} 포함) · 출력 {output}",
     "subtitle": "시스템 전역 상태 · 실시간 갱신",
     "systemStatus": "시스템 상태",
     "taskCount": "{count}개 작업",
@@ -137,16 +130,8 @@
     "title": "전체 개요",
     "tokenConsumption": "LLM Token 소비",
     "tokenUsage": "Token 사용량",
-    "tooltipNew": "신버전: llm_usage 계량 원장에서 가져와 호출마다 정확하고 중단된 소비까지 포함합니다. 기능을 켠 이후의 데이터만 집계합니다.",
-    "tooltipOld": "구버전: activity 통계에서 가져와 과거 작업까지 포함하지만, 중단된 소비는 빠지고 모델 단위까지 정확하지는 않습니다.",
     "totalInOut": "합계 (입력+출력)",
-    "totalNodes": "총 {count}개 노드",
-    "trafficCapture": "트래픽 캡처",
-    "trafficExchanges": "트래픽 교환",
-    "trafficStatusCodes": "트래픽 상태 코드",
-    "verNew": "신버전",
-    "verOld": "구버전",
-    "viewTasks": "작업 보기"
+    "trafficCapture": "트래픽 캡처"
   },
   "header": {
     "updateBadge": "새 버전 {latest}",
@@ -157,7 +142,9 @@
   "nav": {
     "group": {
       "function": "기능",
-      "system": "시스템"
+      "system": "시스템",
+      "operator": "Operator",
+      "advanced": "Advanced"
     },
     "item": {
       "agents": "에이전트",
@@ -180,7 +167,8 @@
       "tasks": "작업",
       "tools": "도구",
       "traffic": "트래픽",
-      "workspace": "작업 공간"
+      "workspace": "작업 공간",
+      "operator": "Operator"
     }
   },
   "notFound": {
@@ -684,6 +672,17 @@
           "fuzzy_url": "URL(부분 일치)",
           "cidr": "CIDR 대역"
         }
+      }
+    },
+    "budget": {
+      "title": "Budget",
+      "timeout": "Timeout",
+      "minutesShort": "min",
+      "deadline": "Deadline",
+      "remaining": "Remaining",
+      "next": {
+        "title": "Budget is over — what else to try",
+        "hint": "Untested areas and server hints for the same task."
       }
     }
   },
@@ -1481,6 +1480,14 @@
         "verification": "보충 검증",
         "supporting": "보조 증거"
       }
+    },
+    "insights": {
+      "tab": "What's next",
+      "pickHint": "Pick a task to see what is worth testing next.",
+      "taskPlaceholder": "Task",
+      "tasksEmpty": "No tasks found",
+      "tasksFailed": "Failed to load the task list",
+      "tasksRetry": "Retry"
     }
   },
   "copyButton": {
@@ -2529,7 +2536,9 @@
       "save": "저장",
       "enabledToast": "동시 실행 제한을 켰습니다. 최대 {count}개 작업을 동시에 실행합니다",
       "disabledToast": "작업 동시 실행 제한을 껐습니다",
-      "saveFailed": "저장 실패: {msg}"
+      "saveFailed": "저장 실패: {msg}",
+      "defaultTimeoutLabel": "기본 작업 시간 제한(분)",
+      "defaultTimeoutHint": "명시적 예산 없이 새 작업을 만들 때 적용됩니다. 0 = 무제한."
     },
     "archive": {
       "state": {
@@ -3195,6 +3204,7 @@
       "modeStandalone": "독립 실행 프로그램",
       "changelog": "변경 로그",
       "connectError": "GitHub에 연결할 수 없습니다: {error} 위에서 전역 프록시를 설정한 뒤 다시 시도할 수 있습니다.",
+      "disabledBuild": "이 빌드는 보안 패치로 원클릭 업데이트가 비활성화되어 있습니다(업데이트 소스 저장소가 삭제됨). 페이지에서 업데이트할 수 없습니다 — 네트워크나 프록시 문제가 아닙니다.",
       "noAsset": "{latest}에는 {os}/{arch}용 릴리스 패키지가 없어({asset} 누락) 자동으로 업데이트할 수 없습니다.",
       "willDownloadPrefix": "다운로드 대상: ",
       "willDownloadSize": " ({size})",
@@ -3760,5 +3770,59 @@
       "name": "취약점 재검증",
       "description": "취약점 상세에서 수동으로 시작해, 원래 증거를 읽고 독립적인 재검증 결론을 저장합니다."
     }
+  },
+  "powerSelector": {
+    "label": "Mission power",
+    "modeAria": "Power mode",
+    "mode": {
+      "recon": "Recon",
+      "standard": "Standard",
+      "full": "Full",
+      "custom": "Custom"
+    },
+    "minutesLabel": "Time budget, min",
+    "minutesHint": "How long the mission may run",
+    "skillsLabel": "Allowed skills",
+    "skillsTrigger": "Select skills",
+    "skillsCount": "{count, plural, one {# skill selected} other {# skills selected}}",
+    "skillsError": "Failed to load skills",
+    "skillsRetry": "Retry",
+    "skillsEmpty": "No skills",
+    "skillsHint": "In custom mode only the selected skills are available"
+  },
+  "insightsCard": {
+    "title": "What's next",
+    "unavailable": "Not available yet",
+    "refresh": "Refresh",
+    "coverage": "Coverage",
+    "untested": "Untested",
+    "suggestions": "Suggestions",
+    "generatedAt": "Generated: {time}",
+    "launch": "Run as mission",
+    "launching": "Launching…",
+    "launched": "Mission #{id} created"
+  },
+  "operatorPage": {
+    "newMission": "New mission",
+    "goalLabel": "Mission goal",
+    "goalPlaceholder": "Describe what to test…",
+    "targetLabel": "Target",
+    "targetHint": "Companies whose assets join the mission scope",
+    "launch": "Launch mission",
+    "launching": "Launching…",
+    "validateGoal": "Describe the mission goal",
+    "createdToast": "Mission launched",
+    "createFailed": "Failed to launch mission: {msg}",
+    "activeMissions": "Active missions",
+    "noActiveMissions": "No unfinished missions",
+    "allTasks": "All",
+    "recentFindings": "Recent findings",
+    "noFindings": "No findings yet",
+    "allFindings": "All",
+    "timeAgo": "{value} ago",
+    "newTargetLabel": "New target (URL or IP)",
+    "newTargetPlaceholder": "example.com or 1.2.3.4 — press Enter to add; multiple allowed",
+    "newTargetHint": "Type new targets — a company and scope are created on launch; subdomains of a domain are covered by its scope automatically. Existing companies below.",
+    "newTargetRemove": "Remove"
   }
 }

@@ -30,7 +30,9 @@ func deleteAsset(d *DB, id int64) {
 
 func TestUpsertRootDomain(t *testing.T) {
 	d, av2, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	id1, err := av2.UpsertRootDomain(UpsertRootDomainReq{Domain: "roottest.io", ICP: "A12345", TaskID: 1})
 	if err != nil {
@@ -64,7 +66,9 @@ func TestUpsertRootDomain(t *testing.T) {
 
 func TestUpsertRootDomainEmpty(t *testing.T) {
 	d, av2, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	_, err := av2.UpsertRootDomain(UpsertRootDomainReq{Domain: ""})
 	if err == nil {
@@ -78,7 +82,9 @@ func TestUpsertRootDomainEmpty(t *testing.T) {
 
 func TestUpsertIP(t *testing.T) {
 	d, av2, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	id1, err := av2.UpsertIP(UpsertIPReq{
 		IP:        "192.168.10.5",
@@ -120,7 +126,9 @@ func TestUpsertIP(t *testing.T) {
 
 func TestUpsertIPBoundDomains(t *testing.T) {
 	d, av2, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	id, err := av2.UpsertIP(UpsertIPReq{
 		IP:           "10.1.2.3",
@@ -152,7 +160,9 @@ func TestUpsertIPBoundDomains(t *testing.T) {
 
 func TestAppendIPPort(t *testing.T) {
 	d, av2, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	id, err := av2.UpsertIP(UpsertIPReq{IP: "10.9.8.7"})
 	if err != nil {
@@ -180,7 +190,9 @@ func TestAppendIPPort(t *testing.T) {
 
 func TestUpsertSubdomain(t *testing.T) {
 	d, av2, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	id, err := av2.UpsertSubdomain(UpsertSubdomainReq{
 		Domain:      "sub.subdtest.com",
@@ -222,7 +234,9 @@ func TestUpsertSubdomain(t *testing.T) {
 
 func TestUpsertSubdomainDedup(t *testing.T) {
 	d, av2, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	id1, err := av2.UpsertSubdomain(UpsertSubdomainReq{Domain: "dedup.subdtest2.net", RecordType: "A", RecordValue: []string{"5.5.5.5"}})
 	if err != nil {
@@ -245,7 +259,9 @@ func TestUpsertSubdomainDedup(t *testing.T) {
 
 func TestUpsertAppByBundle(t *testing.T) {
 	d, av2, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	id1, err := av2.UpsertApp(UpsertAppReq{Name: "MyApp", BundleID: "com.example.myapp", Category: "tools"})
 	if err != nil {
@@ -265,7 +281,9 @@ func TestUpsertAppByBundle(t *testing.T) {
 
 func TestUpsertAppByName(t *testing.T) {
 	d, av2, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	id1, err := av2.UpsertApp(UpsertAppReq{Name: "UniqueAppNoBundle", Category: "utility"})
 	if err != nil {
@@ -288,7 +306,9 @@ func TestUpsertAppByName(t *testing.T) {
 
 func TestUpsertHTTPService(t *testing.T) {
 	d, av2, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	sc := 200
 	cl := int64(1024)
@@ -337,7 +357,9 @@ func TestUpsertHTTPService(t *testing.T) {
 
 func TestUpsertHTTPServiceAuthAppend(t *testing.T) {
 	d, av2, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	auth1 := []map[string]any{{"type": "basic", "username": "admin", "password": "pass"}}
 	id1, err := av2.UpsertHTTPService(UpsertHTTPServiceReq{
@@ -377,7 +399,9 @@ func TestUpsertHTTPServiceAuthAppend(t *testing.T) {
 
 func TestUpsertOtherService(t *testing.T) {
 	d, av2, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	id1, err := av2.UpsertOtherService(UpsertOtherServiceReq{
 		IP:          "172.16.0.1",
@@ -417,7 +441,9 @@ func TestUpsertOtherService(t *testing.T) {
 
 func TestUpsertOtherServiceAuthAppend(t *testing.T) {
 	d, av2, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	auth1 := []map[string]any{{"username": "admin", "password": "secret"}}
 	id1, err := av2.UpsertOtherService(UpsertOtherServiceReq{
@@ -455,7 +481,9 @@ func TestUpsertOtherServiceAuthAppend(t *testing.T) {
 
 func TestUpsertEndpoint(t *testing.T) {
 	d, av2, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	params1 := []map[string]any{{"location": "query", "name": "id", "value": "1"}}
 	id1, err := av2.UpsertEndpoint(UpsertEndpointReq{
@@ -497,7 +525,9 @@ func TestUpsertEndpoint(t *testing.T) {
 
 func TestUpsertEndpointRequiredFields(t *testing.T) {
 	d, av2, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	_, err := av2.UpsertEndpoint(UpsertEndpointReq{URL: "", Method: "GET"})
 	if err == nil {
@@ -516,7 +546,9 @@ func TestUpsertEndpointRequiredFields(t *testing.T) {
 
 func TestQueryByType(t *testing.T) {
 	d, av2, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	id, err := av2.UpsertRootDomain(UpsertRootDomainReq{Domain: "querytest.example.net"})
 	if err != nil {
@@ -542,7 +574,9 @@ func TestQueryByType(t *testing.T) {
 // TestDeleteByTaskID: 独有资产被删,与其他任务共享的资产仅解除关联(保留),host 反查正确。
 func TestDeleteByTaskID(t *testing.T) {
 	d, av2, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	const taskA = int64(90001)
 	const taskB = int64(90002)
@@ -594,7 +628,9 @@ func TestDeleteByTaskID(t *testing.T) {
 
 func TestQueryByTask(t *testing.T) {
 	d, av2, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	const taskID = int64(99999)
 	id, err := av2.UpsertRootDomain(UpsertRootDomainReq{Domain: "taskquery.net", TaskID: taskID})
@@ -643,7 +679,9 @@ func TestQueryByTask(t *testing.T) {
 // 任务资产列表按页取,不再被固定条数截断:60 条资产用 25/页要能完整翻出来。
 func TestQueryByTaskPaging(t *testing.T) {
 	d, av2, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	const taskID = int64(99998)
 	const n = 60
@@ -687,7 +725,9 @@ func TestQueryByTaskPaging(t *testing.T) {
 
 func TestQueryByCompany(t *testing.T) {
 	d, av2, cs := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	companyID, _, err := cs.UpsertCompany("QueryByCompanyCorp", "")
 	if err != nil {
@@ -742,7 +782,9 @@ func TestQueryByCompany(t *testing.T) {
 // 企业资产列表同样按页取,不被固定条数截断。
 func TestQueryByCompanyPaging(t *testing.T) {
 	d, av2, cs := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	companyID, _, err := cs.UpsertCompany("QueryByCompanyPagingCorp", "")
 	if err != nil {
@@ -795,7 +837,9 @@ func TestQueryByCompanyPaging(t *testing.T) {
 
 func TestCountsByType(t *testing.T) {
 	d, av2, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	id, err := av2.UpsertRootDomain(UpsertRootDomainReq{Domain: "counttest.example.biz"})
 	if err != nil {
@@ -818,7 +862,9 @@ func TestCountsByType(t *testing.T) {
 
 func TestCompanyAttributionAtInsertTime(t *testing.T) {
 	d, av2, cs := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	companyID, _, err := cs.UpsertCompany("InsertAttrCorp", "")
 	if err != nil {
@@ -902,7 +948,9 @@ func TestNormalizeURL(t *testing.T) {
 
 func TestAssetPaginationUsesStableIDTieBreaker(t *testing.T) {
 	d, assets, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	stamp := time.Now().UnixNano()
 	taskID := stamp
@@ -954,7 +1002,9 @@ func TestAssetPaginationUsesStableIDTieBreaker(t *testing.T) {
 // refuse a non-address, and the message must tell the caller how to fix it.
 func TestAssetIPRejectsHostname(t *testing.T) {
 	d, av2, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	hostname := "d63cd476.cdn.ucloud.com.cn"
 	cases := []struct {
@@ -1008,7 +1058,9 @@ func TestAssetIPRejectsHostname(t *testing.T) {
 // are excluded. Direct source tasks' scope is included.
 func TestQueryDSLInScopeMembership(t *testing.T) {
 	d, assets, _ := testSetup(t)
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 
 	task, err := d.CreateTask("scope membership", "goal", nil, 0, 0)
 	if err != nil {

@@ -44,9 +44,10 @@ func TestParseVerdictRejectsIncompleteOrAmbiguousReplies(t *testing.T) {
 	}
 }
 
-// Wrapping JSON in markdown is the one deviation models make routinely. Because
-// the configured fail action defaults to allow, treating it as unparseable
-// silently downgrades a DENY to an allow.
+// Wrapping JSON in markdown is the one deviation models make routinely. Treating
+// a fenced reply as unparseable routes it to the configured fail action — under
+// the old "allow" default that silently downgraded a fenced DENY to an allow
+// (the default is fail-closed "deny" now, but allow remains user-configurable).
 func TestParseVerdictUnwrapsCodeFence(t *testing.T) {
 	deny := `{"decision":"deny","comment":"实际操作：删除生产文件；成功后的后果：业务数据丢失；命中规则：D4"}`
 	for _, reply := range []string{

@@ -38,6 +38,22 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 			for _, n := range names {
 				nameSet[n] = true
 			}
+			// 任务技能功率模式再切一刀:任务 preset(recon/standard)或 custom 白名单
+			// 从 agent 可见调色板里剔除未列名的技能。''/full 不过滤;读库失败也放行
+			// (宁可多给技能,不可静默清空)。closure 每次运行重建 → 每次 run 一次查询,无缓存。
+			if ri := agent.RunInfoFrom(ctx); ri.TaskID > 0 {
+				if mode, allowed, err := pg.TaskSkillsMode(ri.TaskID); err != nil {
+					log.Printf("[skills-mode] 读取任务 #%d 技能模式失败,不过滤: %v", ri.TaskID, err)
+				} else if mode != "" && mode != SkillModeFull {
+					if allow, ok := EffectiveSkillSet(mode, allowed); ok {
+						for n := range nameSet {
+							if !allow[n] {
+								delete(nameSet, n)
+							}
+						}
+					}
+				}
+			}
 			if allReg, err := skill.LoadDir(skillDir); err == nil && allReg != nil {
 				reg = skill.NewRegistry()
 				for _, s := range allReg.List() {

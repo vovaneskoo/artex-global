@@ -43,7 +43,9 @@ func TestSoftDeleteIntent(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 	expID, err := d.CreateExploration("soft delete", "假删除")
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +92,9 @@ func TestHardDeleteCascadesExclusiveDescendants(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 	expID, err := d.CreateExploration("hard cascade", "级联删除")
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +131,9 @@ func TestHardDeletePreservesSharedAndGoal(t *testing.T) {
 	if err != nil {
 		t.Skipf("postgres unavailable (%v) — skipping", err)
 	}
-	defer d.Close()
+	// t.Cleanup (not defer): row/cleanup functions registered via
+	// t.Cleanup still need the database open — a defer would close it first.
+	t.Cleanup(func() { _ = d.Close() })
 	expID, err := d.CreateExploration("hard preserve", "保留共享/目标")
 	if err != nil {
 		t.Fatal(err)

@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/Autumn-27/artex/config"
 )
 
 // Task is a row in the task registry (1:1 with an exploration).
@@ -50,6 +53,10 @@ type Task struct {
 	// list_untested_assets、态势里不注入 coverage 块(scope 字段仍保留)。company 关联
 	// (task_scope kind=company)与此开关无关，永不受影响。见 db/task_scope.go。
 	CoverageEnabled bool `json:"coverage_enabled"`
+	// SkillsMode 是任务级技能功率模式:''(默认)=继承 agent 可见全部技能;
+	// recon|standard|full|custom。custom 时 AllowedSkills 生效。见 db/schema.sql §D。
+	SkillsMode    string   `json:"skills_mode"`
+	AllowedSkills []string `json:"allowed_skills,omitempty"` // custom 模式的技能白名单;nil=未设置
 }
 
 // TaskDeleteResult reports optional related-data cleanup performed in the same
@@ -98,6 +105,7 @@ const taskCompanyAssetSource = "company"
 var (
 	ErrTaskCompanyIDsInvalid = errors.New("invalid task company ids")
 	ErrTaskCompanyNotFound   = errors.New("task company not found")
+	ErrTaskSkillsModeInvalid = errors.New("invalid task skills mode")
 )
 
 // NormalizeTaskCompanyIDs validates IDs and removes duplicates while retaining
@@ -131,6 +139,59 @@ func normalizeHeartbeat(sec int) int {
 	return sec
 }
 
+// normalizeTaskSkillsMode validates the skills power mode (empty string =
+// inherit all agent-visible skills) and normalizes the custom whitelist: trim
+// each name, drop empties, dedup while keeping the user's first-seen order. An
+// empty result means "no whitelist" and is stored as NULL.
+func normalizeTaskSkillsMode(mode string, allowed []string) (string, []string, error) {
+	switch mode {
+	case "", "recon", "standard", "full", "custom":
+	default:
+		return "", nil, fmt.Errorf("%w: %q", ErrTaskSkillsModeInvalid, mode)
+	}
+	if len(allowed) == 0 {
+		return mode, nil, nil
+	}
+	seen := make(map[string]struct{}, len(allowed))
+	normalized := make([]string, 0, len(allowed))
+	for _, name := range allowed {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		normalized = append(normalized, name)
+	}
+	if len(normalized) == 0 {
+		return mode, nil, nil
+	}
+	return mode, normalized, nil
+}
+
+// originFactSummary builds the exploration origin fact's summary in the active
+// output language (config.ActiveLanguage, wired by the server to the runtime
+// setting). The summary is user-visible in the task feed ("Начало #N …" card),
+// so a hardcoded Chinese template leaked into localized UI (QA finding).
+func originFactSummary(description, goal string) string {
+	switch config.ActiveLanguage() {
+	case "ru":
+		return "Начало задачи: " + description + "; цель: " + goal
+	case "en":
+		return "Task origin: " + description + "; goal: " + goal
+	case "ja":
+		return "タスク開始: " + description + "; 目標: " + goal
+	case "es":
+		return "Inicio de la tarea: " + description + "; objetivo: " + goal
+	case "zh":
+		return "任务起点：" + description + "；目标：" + goal
+	default: // ko and anything unresolved
+		return "작업 시작: " + description + "; 목표: " + goal
+	}
+}
+
 func (d *DB) CreateTask(description, goal string, llmProfileID *int64, timeoutSeconds, planHeartbeatSeconds int) (*Task, error) {
 	var ids []int64
 	if llmProfileID != nil {
@@ -156,6 +217,10 @@ type TaskCreateOptions struct {
 	CoverageEnabled *bool
 	// InterceptRules 是任务级资产拦截规则,创建时随任务在同一事务内写入 task_intercept_rules。
 	InterceptRules []TaskInterceptRuleInput
+	// SkillsMode/AllowedSkills 任务技能功率模式(''=继承全部;recon|standard|full|custom)
+	// 与 custom 模式的技能白名单;空名单落库为 NULL。见 db/schema.sql §D。
+	SkillsMode    string
+	AllowedSkills []string
 }
 
 // CreateTaskWithOptions creates an exploration, task, direct source relations,
@@ -169,6 +234,17 @@ func (d *DB) CreateTaskWithOptions(description, goal string, opts TaskCreateOpti
 		return nil, err
 	}
 	opts.CompanyIDs = companyIDs
+	skillsMode, allowedSkills, err := normalizeTaskSkillsMode(opts.SkillsMode, opts.AllowedSkills)
+	if err != nil {
+		return nil, err
+	}
+	var allowedSkillsJSON []byte // nil = NULL
+	if len(allowedSkills) > 0 {
+		allowedSkillsJSON, err = json.Marshal(allowedSkills)
+		if err != nil {
+			return nil, err
+		}
+	}
 	tx, err := d.Begin()
 	if err != nil {
 		return nil, err
@@ -184,7 +260,7 @@ func (d *DB) CreateTaskWithOptions(description, goal string, opts TaskCreateOpti
 	// is global and shared, not isolated per task). Being a fact (not a special 'begin' kind) lets every
 	// intent uniformly connect to a fact node, including the first ones.
 	originPayload, _ := json.Marshal(map[string]any{
-		"summary":     "任务起点：" + description + "；目标：" + goal,
+		"summary":     originFactSummary(description, goal),
 		"description": description,
 		"goal":        goal,
 	})
@@ -224,11 +300,12 @@ VALUES ($1, 'fact', $2, 0, 'origin', 'system')`, expID, string(originPayload)); 
 		CompanyIDs:     append([]int64(nil), opts.CompanyIDs...),
 		TimeoutSeconds: opts.TimeoutSeconds, PlanHeartbeatSeconds: opts.PlanHeartbeatSeconds,
 		CoverageEnabled: coverageEnabled,
+		SkillsMode:      skillsMode, AllowedSkills: allowedSkills,
 	}
 	if err := tx.QueryRow(`
-INSERT INTO tasks(name, category_id, description, goal, exploration_id, llm_profile_id, active_llm_profile_id, timeout_seconds, plan_heartbeat_seconds, coverage_enabled)
-VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8,$9)
-RETURNING id, status, paused, created_at`, opts.Name, opts.CategoryID, description, goal, expID, active, opts.TimeoutSeconds, opts.PlanHeartbeatSeconds, coverageEnabled).Scan(&t.ID, &t.Status, &t.Paused, &t.CreatedAt); err != nil {
+INSERT INTO tasks(name, category_id, description, goal, exploration_id, llm_profile_id, active_llm_profile_id, timeout_seconds, plan_heartbeat_seconds, coverage_enabled, skills_mode, allowed_skills)
+VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8,$9,$10,$11)
+RETURNING id, status, paused, created_at`, opts.Name, opts.CategoryID, description, goal, expID, active, opts.TimeoutSeconds, opts.PlanHeartbeatSeconds, coverageEnabled, skillsMode, allowedSkillsJSON).Scan(&t.ID, &t.Status, &t.Paused, &t.CreatedAt); err != nil {
 		return nil, err
 	}
 	if err := insertTaskRelations(tx, t.ID, opts.SourceTaskIDs); err != nil {
@@ -344,15 +421,41 @@ func insertTaskLLMProfiles(tx *sql.Tx, taskID int64, profileIDs []int64) error {
 
 const taskCols = `id, COALESCE(name,''), category_id,
 COALESCE((SELECT category.name FROM task_categories category WHERE category.id=tasks.category_id),''),
-description, goal, exploration_id, status, paused, queued, queued_at, COALESCE(queue_mode,''), llm_profile_id, active_llm_profile_id, COALESCE(parent_ref,''), pinned_at, created_at, completed_at, COALESCE(timeout_seconds,0), COALESCE(plan_heartbeat_seconds,300), COALESCE(coverage_enabled,true), first_run_at, deadline_at`
+description, goal, exploration_id, status, paused, queued, queued_at, COALESCE(queue_mode,''), llm_profile_id, active_llm_profile_id, COALESCE(parent_ref,''), pinned_at, created_at, completed_at, COALESCE(timeout_seconds,0), COALESCE(plan_heartbeat_seconds,300), COALESCE(coverage_enabled,true), first_run_at, deadline_at, COALESCE(skills_mode,''), allowed_skills`
 
 func scanTask(sc interface{ Scan(...any) error }) (*Task, error) {
 	var t Task
-	if err := sc.Scan(&t.ID, &t.Name, &t.CategoryID, &t.CategoryName, &t.Description, &t.Goal, &t.ExplorationID, &t.Status, &t.Paused, &t.Queued, &t.QueuedAt, &t.QueueMode, &t.LLMProfileID, &t.ActiveLLMProfileID, &t.ParentRef, &t.PinnedAt, &t.CreatedAt, &t.CompletedAt, &t.TimeoutSeconds, &t.PlanHeartbeatSeconds, &t.CoverageEnabled, &t.FirstRunAt, &t.DeadlineAt); err != nil {
+	var allowedRaw []byte
+	if err := sc.Scan(&t.ID, &t.Name, &t.CategoryID, &t.CategoryName, &t.Description, &t.Goal, &t.ExplorationID, &t.Status, &t.Paused, &t.Queued, &t.QueuedAt, &t.QueueMode, &t.LLMProfileID, &t.ActiveLLMProfileID, &t.ParentRef, &t.PinnedAt, &t.CreatedAt, &t.CompletedAt, &t.TimeoutSeconds, &t.PlanHeartbeatSeconds, &t.CoverageEnabled, &t.FirstRunAt, &t.DeadlineAt, &t.SkillsMode, &allowedRaw); err != nil {
 		return nil, err
+	}
+	if len(allowedRaw) > 0 {
+		if err := json.Unmarshal(allowedRaw, &t.AllowedSkills); err != nil {
+			return nil, err
+		}
 	}
 	t.Pinned = t.PinnedAt != nil
 	return &t, nil
+}
+
+// TaskSkillsMode returns a task's skills power mode and custom whitelist.
+// Called on every agent launch (server filters the skill palette), no caching.
+// A missing/deleted task reads as an empty mode with a nil whitelist.
+func (d *DB) TaskSkillsMode(taskID int64) (mode string, allowed []string, err error) {
+	var allowedRaw []byte
+	err = d.QueryRow(`SELECT skills_mode, allowed_skills FROM tasks WHERE id=$1 AND deleted_at IS NULL`, taskID).Scan(&mode, &allowedRaw)
+	if err == sql.ErrNoRows {
+		return "", nil, nil
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	if len(allowedRaw) > 0 {
+		if err := json.Unmarshal(allowedRaw, &allowed); err != nil {
+			return "", nil, err
+		}
+	}
+	return mode, allowed, nil
 }
 
 // SetParentRef records a task's parent task id (编排 agent spawn_task 关联).

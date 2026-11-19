@@ -9,6 +9,7 @@ package selfupdate
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -83,6 +84,10 @@ func TestCheckURLErrorsLocalized(t *testing.T) {
 // TestFetchLatestErrorsLocalized: 버전 확인 경로의 네 가지 오류(요청 제한·미발행·기타
 // 상태·해석 실패·tag 누락)가 한국어인지 확인한다. 가짜 transport 로 네트워크를 쓰지 않는다.
 func TestFetchLatestErrorsLocalized(t *testing.T) {
+	// 감사 패치(artex-audit 2026-10) 이후 원격 경로는 ARTEX_ENABLE_SELFUPDATE=1
+	// 옵트인 뒤에만 동작한다(github.go 의 errSelfupdateDisabled 게이트). 이 테스트는
+	// 가짜 transport 로 네트워크 없이 그 게이트 안쪽 문구를 검증하므로 여기서만 켠다.
+	t.Setenv("ARTEX_ENABLE_SELFUPDATE", "1")
 	ctx := context.Background()
 
 	_, errRate := FetchLatest(ctx, stubClient(http.StatusForbidden, ""))
@@ -114,7 +119,22 @@ func TestFetchLatestErrorsLocalized(t *testing.T) {
 // 내려받기 전에 한국어 오류로 멈춘다(FindAsset 실패 → 네트워크 접근 없음). 실행 환경에
 // 따라 checkWritable 가 먼저 막을 수도 있으나 그 오류도 한국어이므로 언어만 단언한다.
 func TestStageMissingAssetLocalized(t *testing.T) {
+	// Stage 도 같은 감사 패치 게이트 뒤에 있다. 아래 릴리스는 Assets 이 비어 있어
+	// 게이트를 열어도 FindAsset 실패(한국어 오류)로 내려받기 전에 끝난다.
+	t.Setenv("ARTEX_ENABLE_SELFUPDATE", "1")
 	rel := &Release{TagName: "v9.9.9"} // Assets 비어 있음
 	err := Stage(context.Background(), &http.Client{}, rel, "0.0.1", nil)
 	assertKoreanError(t, "stage-missing-asset", err)
+}
+
+// TestFetchLatestDisabledWithoutOptIn (F-05): without the ARTEX_ENABLE_SELFUPDATE=1
+// opt-in, FetchLatest must return ErrDisabled (errors.Is-identifiable) so the HTTP
+// layer can distinguish "disabled build" from a connectivity failure and drop the
+// wrong "configure a proxy" advice in the UI.
+func TestFetchLatestDisabledWithoutOptIn(t *testing.T) {
+	t.Setenv("ARTEX_ENABLE_SELFUPDATE", "")
+	_, err := FetchLatest(context.Background(), stubClient(http.StatusOK, "{}"))
+	if !errors.Is(err, ErrDisabled) {
+		t.Fatalf("ErrDisabled 기대, 실제 %v", err)
+	}
 }

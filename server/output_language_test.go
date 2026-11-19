@@ -35,6 +35,7 @@ func TestOutputLanguageCacheFollowsSettings(t *testing.T) {
 	_, _ = m.pg.Exec(`DELETE FROM settings WHERE key=$1`, settingOutputLanguage)
 
 	s := New(context.Background(), m, t.TempDir(), t.TempDir(), t.TempDir())
+	defer s.Close()
 	token, err := signJWT(s.jwtKey)
 	if err != nil {
 		t.Fatal(err)

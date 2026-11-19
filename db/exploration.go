@@ -263,6 +263,21 @@ ON CONFLICT (exploration_id, src_id, rel, dst_id) DO NOTHING`, s.expID, from, re
 	return err
 }
 
+// ExhaustedIntentChildren counts intent nodes linked derived_from FROM parentID
+// that ended in state 'exhausted'. The planner's add_intent guard uses it to stop
+// re-driving a spent edge: if two intents anchored on the same confirmed fact
+// already ran out of budget, a third from the same anchor is almost always the
+// same "final attempt" again (bench night 2026-11-18: #1083 → #1086 burned a
+// double worker budget on one edge).
+func (s *ExplorationStore) ExhaustedIntentChildren(parentID int64) (int, error) {
+	var n int
+	err := s.db.QueryRow(`
+SELECT count(*) FROM exploration_edges e
+JOIN exploration_nodes n ON n.id = e.dst_id AND n.kind='intent' AND n.state='exhausted'
+WHERE e.exploration_id=$1 AND e.src_id=$2 AND e.rel=$3`, s.expID, parentID, RelDerivedFrom).Scan(&n)
+	return n, err
+}
+
 // SetNodeState updates any node's state (never deletes). content_version bumps
 // so a folded member's state flip invalidates its digest's cached body (§5.3).
 func (s *ExplorationStore) SetNodeState(id int64, state string) error {
@@ -818,6 +833,36 @@ WHERE exploration_id=$1 AND kind='intent' AND state='open'`, s.expID).Scan(&n)
 	return n, err
 }
 
+// CountByKind counts this exploration's nodes of one kind (no summary filter).
+// The terminal distill summary (server/distill_auto.go) uses it for the fact
+// count without materializing node payloads.
+func (s *ExplorationStore) CountByKind(kind string) (int, error) {
+	return s.countByKindFiltered(kind, "")
+}
+
+// IntentStateCounts groups this exploration's intents by state in one query, for
+// callers that need several per-state counters (done/exhausted/blocked, ...) at
+// once — e.g. the terminal distill summary — instead of repeating single-state
+// Count* scans.
+func (s *ExplorationStore) IntentStateCounts() (map[string]int, error) {
+	rows, err := s.db.Query(`SELECT state, COUNT(*) FROM exploration_nodes
+WHERE exploration_id=$1 AND kind='intent' GROUP BY state`, s.expID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var state string
+		var n int
+		if err := rows.Scan(&state, &n); err != nil {
+			return nil, err
+		}
+		out[state] = n
+	}
+	return out, rows.Err()
+}
+
 // GetNode returns one node of this exploration by id (nil, nil if not found).
 func (s *ExplorationStore) GetNode(id int64) (*Node, error) {
 	n, err := scanNode(s.db.QueryRow(`SELECT `+nodeCols+` FROM exploration_nodes WHERE id=$1 AND exploration_id=$2`, id, s.expID))
@@ -1169,6 +1214,16 @@ WHERE exploration_id=$1 AND kind='goal' AND state='open')`, s.expID).Scan(&exist
 	return exists, err
 }
 
+// HasAnyGoal reports whether this exploration has ANY goal node at all (any
+// state). The stagnation wind-down skips goalless (chat-injected) tasks: their
+// lifecycle is owned by the frontier drain, not by finding throughput.
+func (s *ExplorationStore) HasAnyGoal() (bool, error) {
+	var exists bool
+	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM exploration_nodes
+WHERE exploration_id=$1 AND kind='goal')`, s.expID).Scan(&exists)
+	return exists, err
+}
+
 // ClaimIntent atomically moves an open intent to running. Returns true if claimed.
 func (s *ExplorationStore) ClaimIntent(id int64, owner string) (bool, error) {
 	res, err := s.db.Exec(`UPDATE exploration_nodes SET state='running', owner=$1
@@ -1388,6 +1443,77 @@ func (d *DB) TaskListMetricsAll() (map[int64]TaskListMetrics, error) {
 		out[explorationID] = metrics
 	}
 	return out, rows.Err()
+}
+
+// TaskListMetrics returns the same aggregates as TaskListMetricsAll for ONE
+// exploration — the shape the single-task endpoint (/api/task/{id}) needs so its
+// DTO carries the same token/goal/finding numbers as the list view, without
+// paying the all-tasks lateral joins on every poll.
+func (d *DB) TaskListMetrics(explorationID int64) (TaskListMetrics, error) {
+	var metrics TaskListMetrics
+	err := d.QueryRow(`
+		SELECT
+		       COALESCE(token_metrics.input_tokens,0),
+		       COALESCE(token_metrics.output_tokens,0),
+		       COALESCE(token_metrics.cache_read_tokens,0),
+		       COALESCE(token_metrics.cache_write_tokens,0),
+		       COALESCE(latest_activity.created_at,0),
+		       COALESCE(goal_metrics.total,0),
+		       COALESCE(goal_metrics.met,0),
+		       COALESCE(intent_metrics.running,0),
+		       COALESCE(finding_metrics.critical,0),
+		       COALESCE(finding_metrics.high,0),
+		       COALESCE(finding_metrics.medium,0),
+		       COALESCE(finding_metrics.low,0)
+		FROM (SELECT $1::bigint AS exploration_id) task
+		LEFT JOIN LATERAL (
+			SELECT SUM(input_tokens) AS input_tokens,
+			       SUM(output_tokens) AS output_tokens,
+			       SUM(cache_read_tokens) AS cache_read_tokens,
+			       SUM(cache_write_tokens) AS cache_write_tokens
+			FROM activity
+			WHERE exploration_id=task.exploration_id AND kind='result'
+		) token_metrics ON true
+		LEFT JOIN LATERAL (
+			SELECT EXTRACT(EPOCH FROM created_at)::bigint AS created_at
+			FROM activity
+			WHERE exploration_id=task.exploration_id
+			ORDER BY created_at DESC
+			LIMIT 1
+		) latest_activity ON true
+		LEFT JOIN LATERAL (
+			SELECT COUNT(*) AS total,
+			       COUNT(*) FILTER (WHERE state='met') AS met
+			FROM exploration_nodes
+			WHERE exploration_id=task.exploration_id AND kind='goal'
+		) goal_metrics ON true
+		LEFT JOIN LATERAL (
+			SELECT COUNT(*) AS running
+			FROM exploration_nodes
+			WHERE exploration_id=task.exploration_id AND kind='intent' AND state='running'
+		) intent_metrics ON true
+		LEFT JOIN LATERAL (
+			SELECT COUNT(*) FILTER (WHERE severity='critical') AS critical,
+			       COUNT(*) FILTER (WHERE severity='high')     AS high,
+			       COUNT(*) FILTER (WHERE severity='medium')   AS medium,
+			       COUNT(*) FILTER (WHERE severity='low')      AS low
+			FROM findings
+			WHERE task_id IN (SELECT id FROM tasks WHERE exploration_id=task.exploration_id)
+		) finding_metrics ON true`, explorationID).Scan(
+		&metrics.Tokens.InputTokens,
+		&metrics.Tokens.OutputTokens,
+		&metrics.Tokens.CacheReadTokens,
+		&metrics.Tokens.CacheWriteTokens,
+		&metrics.LastActivity,
+		&metrics.Goals.Total,
+		&metrics.Goals.Met,
+		&metrics.RunningIntents,
+		&metrics.Findings.Critical,
+		&metrics.Findings.High,
+		&metrics.Findings.Medium,
+		&metrics.Findings.Low,
+	)
+	return metrics, err
 }
 
 // GoalCountsAll returns goal totals (total / met) per exploration id, one query

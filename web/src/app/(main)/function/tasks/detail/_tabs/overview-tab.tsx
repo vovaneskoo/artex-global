@@ -9,6 +9,8 @@ import {
   CheckIcon,
   ClockIcon,
   CoinsIcon,
+  HourglassIcon,
+  LightbulbIcon,
   ListChecksIcon,
   PencilIcon,
   PlusIcon,
@@ -21,6 +23,7 @@ import {
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 
+import { InsightsCard } from "@/components/insights-card";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -89,8 +92,24 @@ function StatCard({
   );
 }
 
+// Terminal task statuses — same set as the task list/detail controls.
+const TERMINAL_STATUSES = ["done", "failed", "timeout"];
+
+// Countdown "H:MM:SS" / "M:SS", clamped at zero. Deliberately locale-neutral
+// with tabular digits; the deadline itself is rendered via getDateLocale()
+// (datetime.ts convention, like finding-retest-panel).
+function formatCountdown(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const two = (n: number) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${two(m)}:${two(s)}` : `${m}:${two(s)}`;
+}
+
 export function OverviewTab({ taskId }: { taskId: string }) {
   const t = useTranslations("taskDetail.overviewTab");
+  const tBudget = useTranslations("taskDetail.budget");
   const [task, setTask] = React.useState<Task | null>(null);
   const [stats, setStats] = React.useState<Stats | null>(null);
   const [intents, setIntents] = React.useState<TaskNode[]>([]);
@@ -131,6 +150,27 @@ export function OverviewTab({ taskId }: { taskId: string }) {
   const [editingConId, setEditingConId] = React.useState<string | null>(null);
   const [editConText, setEditConText] = React.useState("");
   const [editConKind, setEditConKind] = React.useState<TaskConstraint["kind"]>("deny");
+
+  // Budget (optional contract): mission timeout + hard deadline. The countdown
+  // clock ticks once per second only while the task is alive and a deadline
+  // exists; on a terminal status it freezes — anchored to completed_unix when
+  // present so the frozen value is deterministic, else at the last tick seen.
+  const [budgetNow, setBudgetNow] = React.useState(() => Date.now());
+  const timeoutSeconds = task?.timeout_seconds ?? 0;
+  const deadlineMs = task?.deadline_at ? Date.parse(task.deadline_at) : NaN;
+  const terminal = !!task && TERMINAL_STATUSES.includes(task.status);
+  const budgetNowMs = terminal
+    ? task?.completed_unix && task.completed_unix > 0
+      ? task.completed_unix * 1000
+      : budgetNow
+    : budgetNow;
+  const budgetRemainingMs = Number.isNaN(deadlineMs) ? null : deadlineMs - budgetNowMs;
+  const budgetKnown = timeoutSeconds > 0 || !Number.isNaN(deadlineMs);
+  React.useEffect(() => {
+    if (terminal || Number.isNaN(deadlineMs)) return;
+    const timer = setInterval(() => setBudgetNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [terminal, deadlineMs]);
 
   const loadTokens = React.useCallback(async () => {
     try {
@@ -437,6 +477,61 @@ export function OverviewTab({ taskId }: { taskId: string }) {
           </div>
         </CardContent>
       </Card>
+      {/* Budget: mission timeout + hard deadline with a live countdown. Both fields
+          are optional contract — when the backend sends neither, the card hides.
+          On a terminal status the countdown freezes and the "what else to try"
+          insights card appears next to it (same shared component as the findings
+          "What's next" tab); its endpoint is optional too and degrades on its own. */}
+      {(budgetKnown || terminal) && (
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          {budgetKnown && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <HourglassIcon className="size-4 text-amber-500" /> {tBudget("title")}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div>
+                  <div className="text-xs text-muted-foreground">{tBudget("timeout")}</div>
+                  <div className="mt-1 text-lg font-semibold tabular-nums">
+                    {timeoutSeconds > 0 ? `${Math.round(timeoutSeconds / 60)} ${tBudget("minutesShort")}` : "—"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">{tBudget("deadline")}</div>
+                  <div className="mt-1 text-sm">
+                    {Number.isNaN(deadlineMs) ? "—" : new Date(deadlineMs).toLocaleString(getDateLocale())}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">{tBudget("remaining")}</div>
+                  <div
+                    className={`mt-1 text-lg font-semibold tabular-nums ${
+                      budgetRemainingMs != null && budgetRemainingMs <= 0 ? "text-red-600" : ""
+                    }`}
+                  >
+                    {budgetRemainingMs != null ? formatCountdown(budgetRemainingMs) : "—"}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+          {terminal && (
+            <Card size="sm" className="gap-2">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <LightbulbIcon className="size-4 text-amber-500" /> {tBudget("next.title")}
+                </CardTitle>
+                <CardDescription className="text-xs">{tBudget("next.hint")}</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <InsightsCard taskId={taskId} compact />
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
       {/* 목표 관리: 현재 작업의 탐색 목표를 조회·추가·수정·삭제한다. 추가와 수정은 플래너에
           알리고 작업을 재개하며, 삭제는 플래너에만 알린다(재개 없음). 목표 = 최종 산출·검증
           가능한 결과이며, 공격 단계나 정찰 동작이 아니다. */}

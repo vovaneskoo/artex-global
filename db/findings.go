@@ -127,6 +127,30 @@ func scanFindings(rows interface {
 	return out, rows.Err()
 }
 
+// LatestFindingUnix returns the epoch seconds of the task's most recent finding
+// (0 when the task has produced none yet). The stagnation wind-down
+// (server/engine_timeout.go) uses it as its progress signal: a mission that has
+// stopped producing findings is re-verifying what it already knows, which is
+// exactly the tail a wall-clock deadline cannot catch (timeout=0 missions).
+func (d *DB) LatestFindingUnix(taskID int64) (int64, error) {
+	var ts sql.NullInt64
+	err := d.QueryRow(`SELECT EXTRACT(EPOCH FROM MAX(created_at)) FROM findings WHERE task_id=$1`, taskID).Scan(&ts)
+	if err != nil {
+		return 0, err
+	}
+	return ts.Int64, nil
+}
+
+// FindingsCount returns the number of findings recorded for a task. The engine's
+// pivot detector (server/engine_pivot.go) diffs it between planner rounds:
+// an unchanged count while workers keep finishing means the task is grinding
+// without producing — the wall signal.
+func (d *DB) FindingsCount(taskID int64) (int64, error) {
+	var n int64
+	err := d.QueryRow(`SELECT COUNT(*) FROM findings WHERE task_id=$1`, taskID).Scan(&n)
+	return n, err
+}
+
 // ListFindings returns all findings (newest first), joined with task description.
 // Kept for the dashboard's summary; the paginated 发现 page uses ListFindingsPage.
 func (d *DB) ListFindings(limit int) ([]*DBFinding, error) {

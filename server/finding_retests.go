@@ -72,6 +72,70 @@ func (s *Server) listFindingRetests(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"retests": items})
 }
 
+// retestStartError классифицирует невыполненные предусловия запуска ретеста,
+// чтобы HTTP-хендлер сохранил свои прежние коды ответа, а автопланировщик
+// (server/retest_auto.go) шёл по тому же пути и получал те же причины.
+type retestStartError struct {
+	status int
+	reason string
+}
+
+func (e *retestStartError) Error() string { return e.reason }
+
+// launchFindingRetest — единый путь запуска ретеста, общий у HTTP-хендлера
+// (POST /api/exploration/findings/{id}/retests) и автопланировщика: предусловия
+// (агент retester существует и enabled, оба инструмента enabled и привязаны к
+// агенту, чат-LLM доступен, сервис не останавливается) → pg.CreateFindingRetest
+// (тот же лок находки/снапшот/дедуп активного ретеста) → занятие слота chatBusy
+// ДО runConversation. created=false при nil-ошибке значит «активный ретест уже
+// есть» (partial unique) — это не ошибка, а «нечего делать».
+func (s *Server) launchFindingRetest(ctx context.Context, findingID int64, notes string) (*db.FindingRetest, bool, error) {
+	f, err := s.m.pg.GetFinding(findingID)
+	if err != nil {
+		return nil, false, err
+	}
+	if f == nil {
+		return nil, false, &retestStartError{status: 404, reason: "finding not found"}
+	}
+	a, err := s.m.pg.GetAgentByKey(db.FindingRetestAgentKey)
+	if err != nil {
+		return nil, false, err
+	}
+	if a == nil || !a.Enabled {
+		return nil, false, &retestStartError{status: 409, reason: errFindingRetestAgentMissing}
+	}
+	for _, key := range []string{"get_finding_retest_context", "record_finding_retest_result"} {
+		t, err := s.m.pg.GetTool(key)
+		if err != nil {
+			return nil, false, err
+		}
+		if t == nil || !t.Enabled || !slices.Contains(t.Agents, a.Key) {
+			return nil, false, &retestStartError{status: 409, reason: errFindingRetestToolRequired + key}
+		}
+	}
+	if s.resolveChatAgent(&db.Conversation{AgentKey: a.Key}) == nil {
+		return nil, false, &retestStartError{status: 503, reason: s.chatUnavailableReason()}
+	}
+	if s.ctx.Err() != nil {
+		return nil, false, &retestStartError{status: 503, reason: errFindingRetestServiceStopping}
+	}
+	retest, conv, created, err := s.m.pg.CreateFindingRetest(ctx, findingID, notes)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, &retestStartError{status: 404, reason: "finding not found"}
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if created {
+		busyKey := s.convBusyKey(conv.ID)
+		s.chatMu.Lock()
+		s.chatBusy[busyKey] = true
+		s.chatMu.Unlock()
+		s.runConversation(conv, retest.InitialMessage(), busyKey)
+	}
+	return retest, created, nil
+}
+
 func (s *Server) startFindingRetest(w http.ResponseWriter, r *http.Request) {
 	pg := s.pg(w)
 	if pg == nil {
@@ -93,58 +157,15 @@ func (s *Server) startFindingRetest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, errFindingRetestNotesTooLong)
 		return
 	}
-	f, err := pg.GetFinding(id)
-	if err != nil {
-		writeErr(w, 500, err.Error())
-		return
-	}
-	if f == nil {
-		writeErr(w, 404, "finding not found")
-		return
-	}
-	a, err := pg.GetAgentByKey(db.FindingRetestAgentKey)
-	if err != nil {
-		writeErr(w, 500, err.Error())
-		return
-	}
-	if a == nil || !a.Enabled {
-		writeErr(w, 409, errFindingRetestAgentMissing)
-		return
-	}
-	for _, key := range []string{"get_finding_retest_context", "record_finding_retest_result"} {
-		t, err := pg.GetTool(key)
-		if err != nil {
-			writeErr(w, 500, err.Error())
-			return
-		}
-		if t == nil || !t.Enabled || !slices.Contains(t.Agents, a.Key) {
-			writeErr(w, 409, errFindingRetestToolRequired+key)
-			return
-		}
-	}
-	if s.resolveChatAgent(&db.Conversation{AgentKey: a.Key}) == nil {
-		writeErr(w, 503, s.chatUnavailableReason())
-		return
-	}
-	if s.ctx.Err() != nil {
-		writeErr(w, 503, errFindingRetestServiceStopping)
-		return
-	}
-	retest, conv, created, err := pg.CreateFindingRetest(r.Context(), id, req.Notes)
-	if errors.Is(err, sql.ErrNoRows) {
-		writeErr(w, 404, "finding not found")
+	retest, created, err := s.launchFindingRetest(r.Context(), id, req.Notes)
+	var pre *retestStartError
+	if errors.As(err, &pre) {
+		writeErr(w, pre.status, pre.reason)
 		return
 	}
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
-	}
-	if created {
-		busyKey := s.convBusyKey(conv.ID)
-		s.chatMu.Lock()
-		s.chatBusy[busyKey] = true
-		s.chatMu.Unlock()
-		s.runConversation(conv, retest.InitialMessage(), busyKey)
 	}
 	code := http.StatusOK
 	if created {
