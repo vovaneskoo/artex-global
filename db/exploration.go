@@ -1169,6 +1169,16 @@ WHERE exploration_id=$1 AND kind='goal' AND state='open')`, s.expID).Scan(&exist
 	return exists, err
 }
 
+// HasAnyGoal reports whether this exploration has ANY goal node at all (any
+// state). The stagnation wind-down skips goalless (chat-injected) tasks: their
+// lifecycle is owned by the frontier drain, not by finding throughput.
+func (s *ExplorationStore) HasAnyGoal() (bool, error) {
+	var exists bool
+	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM exploration_nodes
+WHERE exploration_id=$1 AND kind='goal')`, s.expID).Scan(&exists)
+	return exists, err
+}
+
 // ClaimIntent atomically moves an open intent to running. Returns true if claimed.
 func (s *ExplorationStore) ClaimIntent(id int64, owner string) (bool, error) {
 	res, err := s.db.Exec(`UPDATE exploration_nodes SET state='running', owner=$1
