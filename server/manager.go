@@ -293,7 +293,37 @@ const (
 	// defaultConcurrencyLimit is the simultaneous-running-task cap when the feature
 	// is enabled but no explicit limit was saved.
 	defaultConcurrencyLimit = 5
+	// settingTaskDefaultTimeout is the mission-level time budget (seconds) applied
+	// when a new task is created without an explicit timeout_seconds. A task that
+	// never finishes on its own would otherwise run forever: 0 in the row means
+	// "unlimited". The value is per setting; "0" disables the default (unlimited)
+	// and any non-positive/invalid value falls back to defaultTaskTimeoutSeconds.
+	settingTaskDefaultTimeout = "task_default_timeout_seconds"
+	// defaultTaskTimeoutSeconds is used when the setting is unset or invalid (2h).
+	defaultTaskTimeoutSeconds = 7200
+	maxTaskDefaultTimeoutSeconds = 7 * 24 * 3600
 )
+
+// TaskDefaultTimeout returns the mission timeout applied to tasks created without
+// an explicit timeout_seconds. A stored "0" means unlimited; anything unparsable
+// falls back to the built-in 2h default.
+func (m *Manager) TaskDefaultTimeout() int {
+	if m == nil || m.pg == nil {
+		return defaultTaskTimeoutSeconds
+	}
+	v, _, err := m.pg.GetSetting(settingTaskDefaultTimeout)
+	if err != nil || strings.TrimSpace(v) == "" {
+		return defaultTaskTimeoutSeconds
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n < 0 {
+		return defaultTaskTimeoutSeconds
+	}
+	if n > maxTaskDefaultTimeoutSeconds {
+		return maxTaskDefaultTimeoutSeconds
+	}
+	return n
+}
 
 // ConcurrencyLimit returns whether the simultaneous-running-task cap is enabled and
 // its limit (default 5 when enabled but unset). limit is always >=1 when enabled.

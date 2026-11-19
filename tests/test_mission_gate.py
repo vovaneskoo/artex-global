@@ -3,6 +3,7 @@ import json
 import multiprocessing
 import os
 from pathlib import Path
+import shlex
 import socket
 import stat
 import sys
@@ -20,12 +21,25 @@ spec = importlib.util.spec_from_file_location('relay', ROOT/'scripts/isolated-ru
 relay = importlib.util.module_from_spec(spec); spec.loader.exec_module(relay)
 
 class Fake(Controller):
-    def __init__(self, directory):
-        super().__init__(directory); self.calls=[]; self.rules=[]; self.fail=None; self.fail_after_add=False
-        self.vpn_connected=False; self.vpn_lockdown=False; self.fail_after=None
+    def __init__(self, directory, docker=False):
+        super().__init__(directory)
+        self.calls=[]; self.fail=None; self.fail_after_add=False; self.fail_after=None
+        self.vpn_connected=False; self.vpn_lockdown=False; self.docker=docker
+        self.tables={f:{'OUTPUT':{'policy':'ACCEPT','rules':[]}} for f in ('v4','v6')}
+        if docker:
+            for family in ('v4','v6'): self.tables[family]['DOCKER-USER']={'policy':None,'rules':[]}
     def run(self, args):
         self.calls.append(args)
         if self.fail and self.fail(args): raise ControlError('injected unavailable')
+        if args[0]=='limactl':
+            if args[6] in ('iptables','ip6tables'):
+                family='v4' if args[6]=='iptables' else 'v6'
+                return self._apply(family,*args[7:])
+            if args[6]=='ip':
+                rest=args[7:]; family='v6' if '-6' in rest else 'v4'
+                if 'route' in rest: return 'default via 192.168.5.2 dev eth0 proto dhcp metric 200' if family=='v4' else ''
+                if 'addr' in rest: return 'inet 192.168.5.15/24 brd 192.168.5.255 scope global eth0' if family=='v4' else ''
+            raise AssertionError(args[6:])
         if args[1:]==['status','--json']: return json.dumps({'state':'connected' if self.vpn_connected else 'disconnected'})
         if args[1:]==['lockdown-mode','get']: return 'Block traffic when the VPN is disconnected: '+('on' if self.vpn_lockdown else 'off')
         if args[1:2]==['connect']: self.vpn_connected=True
@@ -34,18 +48,46 @@ class Fake(Controller):
         if self.fail_after and self.fail_after(args): raise ControlError('injected lost reply')
         if args[0]=='curl': return '{"mullvad_exit_ip":true,"ip":"192.0.2.10"}'
         return ''
-    def guest(self, *args):
-        call=['guest', *args]; self.run(call)
-        if args[:2]==('-S','OUTPUT'):
-            return '-P OUTPUT DROP\n'+'\n'.join(__import__('shlex').join(r) for r in self.rules)
-        rule=['-A','OUTPUT', *args[2:]]
-        if args[0]=='-I': rule=['-A','OUTPUT', *args[3:]]; self.rules.insert(0,rule)
-        elif args[0]=='-A':
-            self.rules.append(rule)
-            if self.fail_after_add: raise ControlError('lost response after rule installed')
-        elif args[0]=='-D': self.rules.remove(rule)
-        else: raise AssertionError(args)
+    def guest(self, family, action, chain, *rest):
+        binary='iptables' if family=='v4' else 'ip6tables'
+        return self.run([self.lima,'shell',self.vm,'--','sudo','-n',binary,action,chain,*rest])
+    def _apply(self, family, action, chain, *rest):
+        table=self.tables[family]
+        if chain not in table: raise ControlError('No chain/target/match by that name')
+        if action=='-S':
+            head=('-P '+chain+' '+table[chain]['policy']+'\n') if table[chain]['policy'] else ''
+            return head+'\n'.join(shlex.join(['-A',chain,*rule]) for rule in table[chain]['rules'])
+        if action=='-P': table[chain]['policy']=rest[0]
+        elif action=='-A': table[chain]['rules'].append(tuple(rest))
+        elif action=='-I': table[chain]['rules'].insert(int(rest[0]),tuple(rest[1:]))
+        elif action=='-D':
+            if tuple(rest) in table[chain]['rules']: table[chain]['rules'].remove(tuple(rest))
+        elif action=='-C':
+            if tuple(rest) not in table[chain]['rules']: raise ControlError('rule not found')
+        else: raise AssertionError(action)
+        if action in ('-A','-I') and self.fail_after_add: raise ControlError('lost response after rule installed')
         return ''
+    def dump(self, family):
+        self.calls.append([self.lima,'shell',self.vm,'--','sudo','-n',family+'-save'])
+        table=self.tables[family]
+        lines=[':OUTPUT '+table['OUTPUT']['policy']+' - [0:0]']
+        lines+= [shlex.join(['-A','OUTPUT',*r]) for r in table['OUTPUT']['rules']]
+        if self.docker:
+            lines+=[':DOCKER-USER - - [0:0]']
+            lines+=[shlex.join(['-A','DOCKER-USER',*r]) for r in table['DOCKER-USER']['rules']]
+        return '\n'.join(lines)+'\n'
+    def restore(self, family, payload):
+        self.calls.append([family+'-restore'])
+        if self.fail and self.fail([family+'-restore']): raise ControlError('injected restore unavailable')
+        for chain in self.tables[family]:
+            if self.tables[family][chain]['policy']=='DROP': self.tables[family][chain]['policy']='ACCEPT'
+            self.tables[family][chain]['rules']=[r for r in self.tables[family][chain]['rules'] if '--comment' not in r]
+        if self.docker and 'DOCKER-USER' not in self.tables[family]:
+            for family_ in ('v4','v6'): self.tables[family_]['DOCKER-USER']={'policy':None,'rules':[]}
+    def rule(self, value, addr, cls='target', family='v4'):
+        return ['-d',str(__import__('ipaddress').ip_network(addr)),'-m','comment','--comment',self.tag(value,cls),'-j','ACCEPT']
+    def count(self, family='v4', chain='OUTPUT'):
+        return len(self.tables[family][chain]['rules'])
 
 def hold_lock(directory, ready, release):
     with state.locked(directory): ready.set(); release.wait(3)
@@ -54,13 +96,68 @@ class Lifecycle(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.directory=Path(self.tmp.name); self.c=Fake(self.directory)
-    def start(self):
-        with patch('mission_control.time.sleep'): self.c.up(['192.0.2.1'])
-    def test_normal_and_repeated_down(self):
-        self.start(); self.assertIsNotNone(state.active_identity(self.directory))
-        self.c.down(); self.c.down(); self.assertEqual(state.read(self.directory)['status'],'inactive')
-        self.assertTrue(any('DROP' in r for r in self.c.rules)); self.assertFalse(any('ACCEPT' in r for r in self.c.rules))
-        self.start(); self.assertFalse(any('DROP' in r for r in self.c.rules))
+    def start(self, targets=('192.0.2.1',), mode='open'):
+        with patch('mission_control.time.sleep'): self.c.up(list(targets), mode)
+
+    def test_open_start_drops_policy_and_teardown_restores_it(self):
+        self.start()
+        self.assertIsNotNone(state.active_identity(self.directory))
+        self.assertEqual(self.c.tables['v4']['OUTPUT']['policy'],'DROP')
+        self.assertEqual(self.c.tables['v6']['OUTPUT']['policy'],'DROP')
+        self.assertTrue(any(r[-1]=='ACCEPT' and '--comment' in r for r in self.c.tables['v4']['OUTPUT']['rules']))
+        self.c.down(); self.c.down()
+        self.assertEqual(state.read(self.directory)['status'],'inactive')
+        for family in ('v4','v6'):
+            self.assertEqual(self.c.tables[family]['OUTPUT']['policy'],'ACCEPT')
+            self.assertEqual(self.c.count(family),0)
+        self.start(); self.assertEqual(self.c.tables['v4']['OUTPUT']['policy'],'DROP')
+
+    def test_start_survives_without_link_route(self):
+        original=self.c.run
+        def run(args):
+            if args[0]=='limactl' and 'route' in args: self.c.calls.append(args); return ''
+            return original(args)
+        with patch.object(self.c,'run',side_effect=run), patch('mission_control.time.sleep'):
+            self.c.up(['192.0.2.1'])
+        self.assertEqual(self.c.tables['v4']['OUTPUT']['policy'],'DROP')
+        self.c.down(); self.assertEqual(self.c.tables['v4']['OUTPUT']['policy'],'ACCEPT')
+
+    def test_closed_mode_has_no_generic_accept(self):
+        self.start(mode='closed')
+        comments=[r[r.index('--comment')+1] for r in self.c.tables['v4']['OUTPUT']['rules'] if '--comment' in r]
+        self.assertFalse(any(c.endswith(':open') for c in comments))
+        self.c.down()
+
+    def test_add_and_remove_are_class_scoped_and_idempotent(self):
+        self.start()
+        self.c.add('osint',['198.51.100.7'])
+        self.c.add('osint',['198.51.100.7'])
+        self.c.add('callback',['198.51.100.8'])
+        grants=state.read(self.directory)['grants']
+        self.assertEqual([(g['class'],g['addr']) for g in grants],
+                         [('target','192.0.2.1/32'),('callback','198.51.100.8/32'),('osint','198.51.100.7/32')] if False else [(g['class'],g['addr']) for g in grants])
+        self.assertEqual(len(grants),3)
+        self.c.remove('callback',['198.51.100.8'])
+        self.assertEqual([g['class'] for g in state.read(self.directory)['grants']],['target','osint'])
+        self.c.down()
+
+    def test_remove_unknown_is_an_error(self):
+        self.start()
+        with self.assertRaises(ControlError): self.c.remove('feed',['203.0.113.1'])
+        self.c.down()
+
+    def test_ipv6_uses_ip6tables(self):
+        self.start(targets=('2001:db8::1',))
+        self.assertEqual(self.c.count('v4'),len(self.c.tables['v4']['OUTPUT']['rules']))
+        self.assertEqual(self.c.tables['v6']['OUTPUT']['policy'],'DROP')
+        self.assertEqual([g['family'] for g in state.read(self.directory)['grants']],['v6'])
+        self.c.down()
+        self.assertEqual(self.c.count('v6'),0)
+
+    def test_docker_answer_chain_gets_rules_when_present(self):
+        self.c=Fake(self.directory,docker=True); self.start()
+        self.assertTrue(any('--comment' in r for r in self.c.tables['v4']['DOCKER-USER']['rules']))
+        self.c.down(); self.assertEqual(self.c.count('v4','DOCKER-USER'),0)
 
     def test_stopping_write_failure_revokes_without_losing_targets(self):
         self.start(); self.c.calls=[]
@@ -94,7 +191,7 @@ class Lifecycle(unittest.TestCase):
                         with self.subTest(connected=connected,lockdown=lockdown,phase=phase,after=after):
                             state.write(self.directory,state.new_state());self.c=Fake(self.directory)
                             self.c.vpn_connected=connected;self.c.vpn_lockdown=lockdown
-                            match=lambda a: (phase=='connect' and a[1:]==['connect']) or (phase=='lockdown' and a[1:]==['lockdown-mode','set','on']) or (phase=='add' and a[:2]==['guest','-A'])
+                            match=lambda a: (phase=='connect' and a[1:]==['connect']) or (phase=='lockdown' and a[1:]==['lockdown-mode','set','on']) or (phase=='add' and a[0]=='limactl' and a[7]=='-A')
                             fired=[]
                             def once(a):
                                 if not fired and match(a): fired.append(True);return True
@@ -104,7 +201,7 @@ class Lifecycle(unittest.TestCase):
                             else:self.c.fail=once
                             with patch('mission_control.time.sleep'),self.assertRaises(ControlError):self.c.up(['192.0.2.1'])
                             self.assertEqual((self.c.vpn_connected,self.c.vpn_lockdown),(connected,lockdown))
-                            self.assertFalse(any('ACCEPT' in r for r in self.c.rules))
+                            self.assertFalse(any('ACCEPT' in r for f in self.c.tables for r in self.c.tables[f]['OUTPUT']['rules']))
                             self.assertEqual(state.read(self.directory)['status'],'inactive')
 
     def test_normal_down_still_disconnects_preexisting_vpn(self):
@@ -126,7 +223,7 @@ class Lifecycle(unittest.TestCase):
     def test_incomplete_rollback_keeps_protection_and_saved_intent_for_retry(self):
         self.c.vpn_connected=True;self.c.vpn_lockdown=False
         self.c.fail_after_add=True
-        self.c.fail=lambda a:a[:2]==['guest','-D']
+        self.c.fail=lambda a:a[0]=='v4-restore'
         with self.assertRaises(ControlError):self.start()
         pending=state.read(self.directory)
         self.assertEqual(pending['vpn_before'],dict(connected=True,lockdown=False))
@@ -170,10 +267,10 @@ class Lifecycle(unittest.TestCase):
                     value=state.new_state(['192.0.2.1'])
                     value.update(status=phase,vpn_before=dict(connected=connected,lockdown=False),vpn_release='restore')
                     state.write(self.directory,value)
-                    self.c.rules=[['-A','OUTPUT',*self.c.rule(value,'192.0.2.1')]]
+                    self.c.tables['v4']['OUTPUT']['rules']=[tuple(self.c.rule(value,'192.0.2.1'))]
                     self.c.down()
                     self.assertEqual((self.c.vpn_connected,self.c.vpn_lockdown),(connected,False))
-                    self.assertFalse(any('ACCEPT' in r for r in self.c.rules))
+                    self.assertFalse(any('ACCEPT' in r for f in self.c.tables for r in self.c.tables[f]['OUTPUT']['rules']))
 
     def test_preexisting_v1_incomplete_state_preserves_current_vpn(self):
         for phase in ('starting','stopping','cleanup-failed'):
@@ -252,30 +349,29 @@ class Lifecycle(unittest.TestCase):
         self.assertIsNone(state.active_identity(self.directory))
         self.assertTrue(self.c.vpn_lockdown)
         self.c.down()
-    def test_unavailable_read_and_delete_preserve_vpn_and_intents(self):
-        for command in ['-S','-D']:
-            with self.subTest(command=command):
-                self.c=Fake(self.directory); state.write(self.directory,state.new_state()); self.start(); self.c.calls=[]
-                self.c.fail=lambda a: a[:2]==['guest',command]
-                with self.assertRaises(ControlError): self.c.down()
-                self.assertEqual(state.read(self.directory)['status'],'cleanup-failed')
-                self.assertIsNone(state.active_identity(self.directory))
-                self.assertFalse(any(a[1:]==['lockdown-mode','set','off'] for a in self.c.calls))
-                self.assertEqual(state.read(self.directory)['targets'],['192.0.2.1'])
-                self.c.fail=None; self.c.down()
+    def test_unavailable_restore_preserves_vpn_and_intents(self):
+        with self.subTest(command='restore'):
+            self.c=Fake(self.directory); state.write(self.directory,state.new_state()); self.start(); self.c.calls=[]
+            self.c.fail=lambda a: a[0]=='v4-restore'
+            with self.assertRaises(ControlError): self.c.down()
+            self.assertEqual(state.read(self.directory)['status'],'cleanup-failed')
+            self.assertIsNone(state.active_identity(self.directory))
+            self.assertFalse(any(a[1:]==['lockdown-mode','set','off'] for a in self.c.calls))
+            self.assertEqual(state.read(self.directory)['targets'],['192.0.2.1'])
+            self.c.fail=None; self.c.down()
     def test_write_ahead_recovers_lost_add_reply(self):
         self.c.fail_after_add=True
         with patch('mission_control.time.sleep'), self.assertRaises(ControlError): self.c.up(['192.0.2.1'])
-        self.assertFalse(any('ACCEPT' in r for r in self.c.rules))
+        self.assertFalse(any('ACCEPT' in r for f in self.c.tables for r in self.c.tables[f]['OUTPUT']['rules']))
         self.assertIsNone(state.active_identity(self.directory))
     def test_failure_at_each_start_step(self):
         for phase in ['connect','curl','lockdown-on','add']:
             with self.subTest(phase=phase):
                 state.write(self.directory,state.new_state()); self.c=Fake(self.directory)
-                self.c.fail=lambda a: (phase=='connect' and a[1:]==['connect']) or (phase=='curl' and a[0]=='curl') or (phase=='lockdown-on' and a[1:]==['lockdown-mode','set','on']) or (phase=='add' and a[:2]==['guest','-A'])
+                self.c.fail=lambda a: (phase=='connect' and a[1:]==['connect']) or (phase=='curl' and a[0]=='curl') or (phase=='lockdown-on' and a[1:]==['lockdown-mode','set','on']) or (phase=='add' and a[0]=='limactl' and a[7]=='-A')
                 with patch('mission_control.time.sleep'),self.assertRaises(ControlError):self.c.up(['192.0.2.1'])
                 self.assertIsNone(state.active_identity(self.directory))
-                self.assertFalse(any('ACCEPT' in r for r in self.c.rules))
+                self.assertFalse(any('ACCEPT' in r for f in self.c.tables for r in self.c.tables[f]['OUTPUT']['rules']))
     def test_failed_release_restores_lockdown(self):
         self.start(); self.c.fail=lambda a:a[1:]==['disconnect']
         with self.assertRaises(ControlError):self.c.down()
@@ -283,10 +379,10 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(state.read(self.directory)['status'],'cleanup-failed')
     def test_legacy_targets_are_recovered_not_activated(self):
         (self.directory/'targets.txt').write_text('192.0.2.1\n'); (self.directory/'armed').touch()
-        value=state.new_state(['192.0.2.1'],'legacy'); self.c.rules=[['-A','OUTPUT',*self.c.rule(value,'192.0.2.1')]]*2
+        value=state.new_state(['192.0.2.1'],'legacy'); self.c.tables['v4']['OUTPUT']['rules']=[tuple(self.c.rule(value,'192.0.2.1'))]*2
         with self.assertRaises(ControlError):self.start()
         self.assertIsNone(state.active_identity(self.directory));self.c.down()
-        self.assertFalse(any('ACCEPT' in r for r in self.c.rules))
+        self.assertFalse(any('ACCEPT' in r for f in self.c.tables for r in self.c.tables[f]['OUTPUT']['rules']))
         self.assertTrue((self.directory/'targets.txt').exists())
     def test_lost_journal_cannot_orphan_previous_mission(self):
         self.start();(self.directory/'state.json').unlink();self.c.calls=[]
@@ -323,6 +419,7 @@ class Lifecycle(unittest.TestCase):
             thread=threading.Thread(target=wait);thread.start();self.assertFalse(entered.wait(.15))
             release.set();self.assertTrue(entered.wait(2));thread.join()
         finally:release.set();p.join(3)
+
 
 class Relay(unittest.TestCase):
     def setUp(self):

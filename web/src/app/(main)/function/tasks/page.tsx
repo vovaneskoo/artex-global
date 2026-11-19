@@ -1094,6 +1094,7 @@ function ConcurrencySettingsDialog() {
   const [open, setOpen] = React.useState(false);
   const [enabled, setEnabled] = React.useState(false);
   const [limit, setLimit] = React.useState("5");
+  const [defaultTimeoutMin, setDefaultTimeoutMin] = React.useState("120");
   const [loading, setLoading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
 
@@ -1105,6 +1106,7 @@ function ConcurrencySettingsDialog() {
       .then((settings) => {
         setEnabled(!!settings.task_concurrency_enabled);
         setLimit(String(settings.task_concurrency_limit ?? 5));
+        setDefaultTimeoutMin(String(Math.round((settings.task_default_timeout_seconds ?? 7200) / 60)));
       })
       .catch(() => {
         // Keep the dialog usable with defaults; reopening retries the request.
@@ -1114,9 +1116,14 @@ function ConcurrencySettingsDialog() {
 
   async function save() {
     const nextLimit = Math.max(1, Math.floor(Number(limit) || 5));
+    const nextTimeout = Math.max(0, Math.floor(Number(defaultTimeoutMin) || 0)) * 60;
     setSaving(true);
     try {
-      await api.setSettings({ task_concurrency_enabled: enabled, task_concurrency_limit: nextLimit });
+      await api.setSettings({
+        task_concurrency_enabled: enabled,
+        task_concurrency_limit: nextLimit,
+        task_default_timeout_seconds: nextTimeout,
+      });
       toast.success(enabled ? t("concurrency.enabledToast", { count: nextLimit }) : t("concurrency.disabledToast"));
       setOpen(false);
     } catch (error) {
@@ -1160,6 +1167,19 @@ function ConcurrencySettingsDialog() {
               />
             </div>
           )}
+          <div className="grid gap-2">
+            <Label htmlFor="task-default-timeout">{t("concurrency.defaultTimeoutLabel")}</Label>
+            <span className="text-muted-foreground text-xs">{t("concurrency.defaultTimeoutHint")}</span>
+            <Input
+              id="task-default-timeout"
+              type="number"
+              min={0}
+              className="w-32"
+              value={defaultTimeoutMin}
+              onChange={(event) => setDefaultTimeoutMin(event.target.value)}
+              disabled={loading}
+            />
+          </div>
         </div>
         <DialogFooter>
           <DialogClose asChild>

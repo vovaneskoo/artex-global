@@ -933,6 +933,8 @@ export interface Settings {
   // 任务并发上限:同时「运行中」的任务数上限。关闭=不限;开启后新建任务超限则排队,有空位自动启动。
   task_concurrency_enabled?: boolean; // 默认 false
   task_concurrency_limit?: number; // 开启后默认 5
+  // 新建任务未指定超时时的默认任务时长(秒);0=不限时。默认 7200(2h)，最大 604800(7天)。
+  task_default_timeout_seconds?: number;
   // LLM 轮询(故障转移)。默认关；开启后「未指定模型」的 agent 在当前配置不可用
   // （余额不足/key 失效/限流/服务异常）时自动切到下一个配置。
   llm_pool_enabled?: boolean; // 默认 false

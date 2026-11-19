@@ -2551,7 +2551,9 @@
       "save": "Save",
       "enabledToast": "Concurrency limit on. Up to {count} tasks run at the same time",
       "disabledToast": "Task concurrency limit turned off",
-      "saveFailed": "Save failed: {msg}"
+      "saveFailed": "Save failed: {msg}",
+      "defaultTimeoutLabel": "Default mission time limit (min)",
+      "defaultTimeoutHint": "Applied when a new mission is created without an explicit budget. 0 = unlimited."
     },
     "archive": {
       "state": {

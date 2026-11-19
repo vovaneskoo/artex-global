@@ -36,6 +36,7 @@ func TestServerErrorConstantsLocalized(t *testing.T) {
 		"python_not_detected":   errPythonNotDetected,
 		"notify_base_url":       errNotifyBaseURLScheme,
 		"notify_digest":         errNotifyDigestRange,
+		"task_default_timeout":  errTaskDefaultTimeoutRange,
 		"new_session":           errTaskDeletingNewSession,
 		"new_message":           errTaskDeletingNewMessage,
 		"main_agent_busy":       errMainAgentBusy,

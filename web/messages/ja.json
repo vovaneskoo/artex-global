@@ -2551,7 +2551,9 @@
       "save": "保存",
       "enabledToast": "同時実行制限をオンにしました。最大 {count} 件のタスクを同時に実行します",
       "disabledToast": "タスクの同時実行制限をオフにしました",
-      "saveFailed": "保存に失敗しました: {msg}"
+      "saveFailed": "保存に失敗しました: {msg}",
+      "defaultTimeoutLabel": "既定のミッション制限時間(分)",
+      "defaultTimeoutHint": "明示的な予算なしで新しいミッションを作成したときに適用されます。0 = 無制限。"
     },
     "archive": {
       "state": {

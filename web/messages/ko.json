@@ -2551,7 +2551,9 @@
       "save": "저장",
       "enabledToast": "동시 실행 제한을 켰습니다. 최대 {count}개 작업을 동시에 실행합니다",
       "disabledToast": "작업 동시 실행 제한을 껐습니다",
-      "saveFailed": "저장 실패: {msg}"
+      "saveFailed": "저장 실패: {msg}",
+      "defaultTimeoutLabel": "기본 작업 시간 제한(분)",
+      "defaultTimeoutHint": "명시적 예산 없이 새 작업을 만들 때 적용됩니다. 0 = 무제한."
     },
     "archive": {
       "state": {

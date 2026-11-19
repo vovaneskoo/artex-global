@@ -77,6 +77,8 @@ const (
 	// 알림 전역 설정 (링크 기준 주소·요약 주기 — web notify.global 라벨과 동일 표기)
 	errNotifyBaseURLScheme = "링크 기준 주소는 http:// 또는 https://로 시작해야 합니다"
 	errNotifyDigestRange   = "요약 주기는 1~1440분 사이여야 합니다"
+	// 새 작업 기본 제한 시간(초). 0=무제한, 상한 7일.
+	errTaskDefaultTimeoutRange = "기본 작업 시간은 0(무제한) 또는 최대 604800초(7일)여야 합니다"
 
 	// 사용자 대면 출력 언어 설정 (putSettings)
 	errOutputLanguageInvalid = "지원하지 않는 언어입니다(en·ko·zh·es·ja 중 하나여야 합니다)"
@@ -1643,7 +1645,7 @@ type createTaskReq struct {
 	LLMProfileIDs        []int64  `json:"llm_profile_ids,omitempty"`   // 有序任务级配置链;第一项初始生效
 	SourceTaskIDs        []string `json:"source_task_ids,omitempty"`   // 仅直接、只读继承的来源任务
 	CompanyIDs           []int64  `json:"company_ids,omitempty"`       // 关联企业范围并快照关联当前企业资产;不复制资产或强制生成意图
-	TimeoutSeconds       int      `json:"timeout_seconds"`             // 任务级超时(秒);0/省略=不限时
+	TimeoutSeconds       *int     `json:"timeout_seconds"`             // 任务级超时(秒);省略/null=用全局默认(默认 2h),显式 0=不限时
 	PlanHeartbeatSeconds int      `json:"plan_heartbeat_seconds"`      // planner 心跳触发间隔(秒);0/省略=默认600(10min);下限=默认=600,低于自动抬到600
 	SeedFirstIntent      *bool    `json:"seed_first_intent,omitempty"` // 创建时直接下发一条种子意图(内容=描述+目标),让 worker 免等首轮 planner 直接开跑;省略/null=默认关闭,走标准先规划再执行。显式传 true 才开(CTF 常一 work 解决时可省掉开跑前的 planner 轮)。
 	CoverageEnabled      *bool    `json:"coverage_enabled,omitempty"`  // 资产覆盖度功能;省略/null=默认开(true)。false=关闭覆盖度计算/展示/自动累积范围+隐藏 add_task_scope/list_untested_assets。company 关联不受影响。
@@ -1673,8 +1675,13 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
-	if req.TimeoutSeconds < 0 {
-		req.TimeoutSeconds = 0
+	// 省略 = 用全局默认超时(默认 2h),避免一条 planner 永不判定达成的任务靠
+	// 心跳无限跑下去;显式传 0 才表示不限时。负数按 0 处理。
+	timeoutSeconds := 0
+	if req.TimeoutSeconds == nil {
+		timeoutSeconds = s.m.TaskDefaultTimeout()
+	} else if *req.TimeoutSeconds > 0 {
+		timeoutSeconds = *req.TimeoutSeconds
 	}
 	if len(req.SourceTaskIDs) > db.MaxTaskSourceCount {
 		writeErr(w, 400, fmt.Sprintf(trMsg(errCreateTaskSourceLimit), db.MaxTaskSourceCount))
@@ -1733,7 +1740,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	t, err := s.m.CreateTaskWithOptions(req.Description, req.Goal, db.TaskCreateOptions{
 		Name: strings.TrimSpace(req.Name), CategoryID: req.CategoryID,
 		SourceTaskIDs: sourceIDs, CompanyIDs: req.CompanyIDs, LLMProfileIDs: req.LLMProfileIDs,
-		TimeoutSeconds: req.TimeoutSeconds, PlanHeartbeatSeconds: req.PlanHeartbeatSeconds,
+		TimeoutSeconds: timeoutSeconds, PlanHeartbeatSeconds: req.PlanHeartbeatSeconds,
 		CoverageEnabled: req.CoverageEnabled,
 		SkillsMode:      req.SkillsMode, AllowedSkills: allowedSkills,
 		InterceptRules: interceptRules,
@@ -3543,6 +3550,8 @@ func (s *Server) settingsPayload() map[string]any {
 		"workers":                  s.m.Workers(),               // 并发工作 agent 数(默认3)；对之后启动的任务生效
 		"task_concurrency_enabled": concOn,                      // 任务并发上限开关(默认关)
 		"task_concurrency_limit":   concLimit,                   // 同时运行任务上限(开启后默认5)
+		// 新建任务未指定超时时的默认任务时长(秒);0=不限时。默认 2h。
+		"task_default_timeout_seconds": s.m.TaskDefaultTimeout(),
 		// LLM 轮询(故障转移)。默认关；开启后走全局激活配置的 agent 在当前配置不可用时
 		// 自动切到下一个配置。bind_fallback 仅在轮询开启时有意义(默认关)。
 		"llm_pool_enabled":       s.m.LLMPoolEnabled(),
@@ -3616,6 +3625,8 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		// 任务并发上限:同时「运行中」的任务数上限。关闭=不限;开启后新建任务超限则排队,有空位自动启动。
 		ConcurrencyEnabled *bool `json:"task_concurrency_enabled"`
 		ConcurrencyLimit   *int  `json:"task_concurrency_limit"`
+		// 新建任务的默认超时(秒);0=不限时。只影响之后创建的任务。
+		TaskDefaultTimeout *int `json:"task_default_timeout_seconds"`
 		// LLM 轮询(故障转移)开关 + 「绑定配置失败也兜底回轮询链」开关。两者都需要
 		// 重建 provider 链才生效，走下面的 changed → applyLLM 路径。
 		LLMPoolEnabled      *bool `json:"llm_pool_enabled"`
@@ -3727,6 +3738,17 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		// 立即协调一次:关闭时放行全部排队,调高上限时补位启动,不必等下一个 tick。
 		go s.reconcileConcurrency()
+	}
+	if req.TaskDefaultTimeout != nil {
+		v := *req.TaskDefaultTimeout
+		if v < 0 || v > maxTaskDefaultTimeoutSeconds {
+			writeErr(w, 400, errTaskDefaultTimeoutRange)
+			return
+		}
+		if err := s.m.pg.SetSetting(settingTaskDefaultTimeout, strconv.Itoa(v)); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
 	}
 	if req.PythonInterp != nil {
 		if err := s.m.pg.SetSetting(settingPythonInterp, strings.TrimSpace(*req.PythonInterp)); err != nil {

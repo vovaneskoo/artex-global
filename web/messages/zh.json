@@ -2551,7 +2551,9 @@
       "save": "保存",
       "enabledToast": "已开启并发限制：最多同时运行 {count} 个任务",
       "disabledToast": "已关闭任务并发限制",
-      "saveFailed": "保存失败：{msg}"
+      "saveFailed": "保存失败：{msg}",
+      "defaultTimeoutLabel": "默认任务时限（分钟）",
+      "defaultTimeoutHint": "当新建任务未指定预算时应用。0 = 无限制。"
     },
     "archive": {
       "state": {

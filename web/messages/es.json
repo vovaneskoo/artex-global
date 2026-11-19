@@ -2551,7 +2551,9 @@
       "save": "Guardar",
       "enabledToast": "Límite de concurrencia activado. Se ejecutan hasta {count} tareas a la vez",
       "disabledToast": "Límite de concurrencia de tareas desactivado",
-      "saveFailed": "Error al guardar: {msg}"
+      "saveFailed": "Error al guardar: {msg}",
+      "defaultTimeoutLabel": "Límite de tiempo predeterminado de la misión (min)",
+      "defaultTimeoutHint": "Se aplica cuando se crea una misión sin presupuesto explícito. 0 = ilimitado."
     },
     "archive": {
       "state": {
