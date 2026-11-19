@@ -41,10 +41,10 @@ for r in json.load(sys.stdin) or []:
             seen.add(n); print(n)
 ' "$ROOT" >>"$TMP" 2>/dev/null || log "crt.sh failed"
   log "subfinder for $ROOT"
-  timeout 300 subfinder -d "$ROOT" -silent -all 2>/dev/null >>"$TMP" || log "subfinder failed"
+  timeout 120 subfinder -d "$ROOT" -silent -timeout 30 2>/dev/null >>"$TMP" || log "subfinder failed"
   sort -u "$TMP" -o "$TMP"
   log "$(wc -l <"$TMP" | tr -d ' ') unique names, resolving via dnsx"
-  timeout 180 dnsx -silent -a -resp -json -l "$TMP" 2>/dev/null |
+  timeout 300 stdbuf -oL dnsx -silent -a -resp -json -threads 50 -l "$TMP" 2>/dev/null |
     python3 -c '
 import json,sys
 for line in sys.stdin:
