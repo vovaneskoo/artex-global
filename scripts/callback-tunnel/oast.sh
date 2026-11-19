@@ -84,6 +84,10 @@ cmd_up() {
   public=$(start_bore) || public=$(start_serveo) || die "no tunnel provider worked"
   host=${public%%:*}; port=${public##*:}
   public_verify "$host" "$port"
+  ENGINE_CONTAINER=${ARTEX_ENGINE_CONTAINER:-nervous_lamarr}
+  if cmd docker ps --format '{{.Names}}' | grep -q "^$ENGINE_CONTAINER$"; then
+    cmd docker network connect "$NET" "$ENGINE_CONTAINER" >/dev/null 2>&1 || true
+  fi
   python3 - "$STATE" "$host" "$port" <<'PY'
 import json, sys, time, os
 state, host, port = sys.argv[1], sys.argv[2], int(sys.argv[3])
@@ -104,6 +108,10 @@ cmd_status() {
 }
 
 cmd_down() {
+  ENGINE_CONTAINER=${ARTEX_ENGINE_CONTAINER:-nervous_lamarr}
+  if cmd docker inspect "$ENGINE_CONTAINER" >/dev/null 2>&1; then
+    cmd docker network disconnect "$NET" "$ENGINE_CONTAINER" >/dev/null 2>&1 || true
+  fi
   containers_clean
   echo "OAST DOWN"
 }
