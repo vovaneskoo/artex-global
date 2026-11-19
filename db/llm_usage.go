@@ -107,6 +107,18 @@ ORDER BY SUM(input_tokens) + SUM(output_tokens) DESC, model`, taskID)
 	return out, rows.Err()
 }
 
+// TaskTotalTokens returns a task's lifetime token spend from the always-on
+// llm_usage ledger (input + output + cache). Used by the token-budget police;
+// cache reads count because they are billed.
+func (d *DB) TaskTotalTokens(taskID string) (int64, error) {
+	var n int64
+	err := d.QueryRow(`
+SELECT COALESCE(SUM(input_tokens + output_tokens + cache_read + cache_write),0)
+FROM llm_usage
+WHERE COALESCE(task_id,'') = $1`, taskID).Scan(&n)
+	return n, err
+}
+
 // ProfileUsage aggregates the whole ledger's token spend for one LLM profile
 // (global, all tasks). Powers the dashboard's per-profile token card (new source).
 type ProfileUsage struct {

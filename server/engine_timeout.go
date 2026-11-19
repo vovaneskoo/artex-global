@@ -173,6 +173,9 @@ func (e *Engine) deadlineCoordinator(ctx context.Context, t *Task) {
 			if e.stagnationSettle(ctx, t) {
 				return
 			}
+			if e.budgetSettle(ctx, t) {
+				return
+			}
 		}
 		dl := e.taskDeadline(t)
 		if dl <= 0 {
@@ -193,7 +196,7 @@ func (e *Engine) deadlineCoordinator(ctx context.Context, t *Task) {
 			}
 			continue
 		}
-		e.settleTask(ctx, t)
+		e.settleTask(ctx, t, agent.AbortSettleDrainTimeout)
 		return
 	}
 }
@@ -205,6 +208,7 @@ func (e *Engine) deadlineCoordinator(ctx context.Context, t *Task) {
 // never finds anything also stops instead of idling forever. Guards:
 //   - goalless (chat-injected) tasks: lifecycle owned by the frontier drain;
 //   - paused/settling/deleting/terminal tasks: not judged stale this round.
+//
 // Note: a task paused for longer than the window may settle soon after resume —
 // intentional (it produced nothing before pausing), and the settle's final
 // planner round still gets to declare goals met → done rather than timeout.
@@ -244,16 +248,38 @@ func (e *Engine) stagnationSettle(ctx context.Context, t *Task) bool {
 	}
 	log.Printf("[stagnation] task %s 无新发现已达 %s(最近产出 %s),进入收尾时序",
 		t.ID, window, since.Format("2006-01-02 15:04:05"))
-	e.settleTask(ctx, t)
+	e.settleTask(ctx, t, agent.AbortSettleDrainTimeout)
+	return true
+}
+
+// budgetSettle winds a task down when its lifetime LLM token spend reaches the
+// task_token_budget ceiling (0 = no budget). Runs on the coordinator's slow
+// cadence; the always-on llm_usage ledger is the meter. Same settle sequence as
+// the deadline path; the abort cause records why runs were cancelled.
+func (e *Engine) budgetSettle(ctx context.Context, t *Task) bool {
+	if e.IsPaused(t.ID) || e.isSettling(t.ID) || e.IsDeleting(t.ID) {
+		return false
+	}
+	budget := e.m.TaskTokenBudget()
+	if budget <= 0 {
+		return false
+	}
+	total, err := e.m.pg.TaskTotalTokens(t.ID)
+	if err != nil || total < budget {
+		return false
+	}
+	log.Printf("[budget] task %s token 预算已用 %d/%d,进入收尾时序", t.ID, total, budget)
+	e.settleTask(ctx, t, agent.AbortBudgetExhausted)
 	return true
 }
 
 // settleTask runs the ordered settle sequence once (§4 steps ①–⑥).
-func (e *Engine) settleTask(ctx context.Context, t *Task) {
+// cause (may be nil) labels the hard-cancel of stragglers in the audit trail.
+func (e *Engine) settleTask(ctx context.Context, t *Task, cause error) {
 	if !e.markSettling(t.ID) {
 		return
 	}
-	log.Printf("[deadline] task %s 到达超时上限,进入收尾时序", t.ID)
+	log.Printf("[deadline] task %s 进入收尾时序", t.ID)
 
 	// ④ 等在跑 worker/planner drain(在跑 run 因夹逼的 MaxDuration 自行进收尾);
 	// 超过 grace 仍未清空 → 硬 cancel 该任务 exec ctx(settling-aware 分支正确归类)。
@@ -261,7 +287,11 @@ func (e *Engine) settleTask(ctx context.Context, t *Task) {
 	for e.inflightCount(t.ID) > 0 {
 		if time.Now().After(hardStop) {
 			log.Printf("[deadline] task %s drain 超时(%s),硬取消在跑 run", t.ID, settleDrainGrace)
-			e.cancelExec(t.ID, agent.AbortSettleDrainTimeout)
+			hard := cause
+			if hard == nil {
+				hard = agent.AbortSettleDrainTimeout
+			}
+			e.cancelExec(t.ID, hard)
 			_ = sleepCtx(ctx, 3*time.Second) // 给 worker 分支一点时间落库/归类
 			break
 		}
