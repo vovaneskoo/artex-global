@@ -1,0 +1,122 @@
+# syntax=docker/dockerfile:1
+#
+# Offensive mission image: Kali rolling + a prebuilt Linux artex binary.
+# Same contract as Dockerfile (binary is cross-compiled outside, only the apt
+# layer is emulated), but ships the recon/exploitation/loot toolchain the
+# full external-attack missions need. Kept separate so the default image stays
+# small.
+#
+# Build (inside an isolated VM or CI):
+#   CGO_ENABLED=0 GOARCH=arm64 go build -tags embedui -o dist/arm64/artex ./cmd/artex
+#   docker build -f Dockerfile.offsec --build-arg TARGETARCH=arm64 -t artex-offsec:latest .
+#
+# Host helper: scripts/build-offsec-image.sh (builds, packs context, loads VM).
+FROM kalilinux/kali-rolling
+ARG TARGETARCH
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIPX_HOME=/opt/pipx \
+    PIPX_BIN_DIR=/usr/local/bin \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN printf '%s\n' \
+      'deb http://http.kali.org/kali kali-rolling main contrib non-free non-free-firmware' \
+      'deb-src http://http.kali.org/kali kali-rolling main contrib non-free non-free-firmware' \
+      > /etc/apt/sources.list \
+    && apt-get update && apt-get -y --no-install-recommends upgrade \
+    && apt-get install -y --no-install-recommends \
+      ca-certificates curl wget git jq yq zstd xz-utils unzip zip file less vim-tiny nano \
+      procps psmisc iproute2 iptables iputils-ping dnsutils whois openssl openssh-client \
+      socat autossh netcat-openbsd ncat tcpdump tshark python3 python3-pip python3-venv pipx \
+      golang-go default-jre-headless chromium make gcc libsqlite3-dev python3-dev build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- recon -------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      nmap masscan naabu arp-scan subfinder amass dnsx httpx-toolkit ffuf feroxbuster \
+      gobuster dirb dirsearch whatweb wafw00f nikto gowitness gron katana eyewitness \
+      snmp onesixtyone nbtscan ldap-utils smbclient smbmap enum4linux-ng dnsrecon dnsenum \
+      fierce theharvester recon-ng \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- exploitation ------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      nuclei exploitdb sqlmap metasploit-framework hydra medusa impacket-scripts netexec \
+      crackmapexec responder bettercap mitm6 bloodhound.py john hashcat wfuzz siege hping3 \
+      dalfox arjun paramspider commix joomscan wpscan chisel ligolo-ng gitleaks trufflehog \
+      ssdeep binwalk steghide libimage-exiftool-perl \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- databases / loot --------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      mariadb-client default-mysql-client postgresql-client freetds-bin python3-pymssql \
+      redis-tools sqlite3 awscli s3cmd \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- TLS / VPN / SMTP --------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      sslyze testssl.sh wireguard-tools openvpn swaks \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- Go tooling (recon + OAST) ------------------------------------------------
+ENV GOBIN=/usr/local/bin GOFLAGS=-buildvcs=false
+RUN go install github.com/lc/gau/v2/cmd/gau@latest \
+    && go install github.com/tomnomnom/waybackurls@latest \
+    && go install github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest \
+    && rm -rf /root/go/pkg/mod /root/.cache/go-build
+
+# --- standalone binaries ------------------------------------------------------
+RUN set -eux; \
+    arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
+    case "$arch" in arm64) rust_arch=aarch64 ;; amd64) rust_arch=x86_64 ;; *) rust_arch="$arch" ;; esac; \
+    curl -fsSL "https://github.com/ekzhang/bore/releases/latest/download/bore-v0.6.0-${rust_arch}-unknown-linux-musl.tar.gz" \
+      -o /tmp/bore.tgz; \
+    tar -xzf /tmp/bore.tgz -C /usr/local/bin; rm /tmp/bore.tgz; \
+    chmod +x /usr/local/bin/bore; \
+    curl -fsSL "https://github.com/frohoff/ysoserial/releases/latest/download/ysoserial-all.jar" \
+      -o /opt/ysoserial.jar; \
+    curl -fsSL "https://github.com/cckuailong/JNDI-Injection-Exploit-Plus/releases/latest/download/JNDI-Injection-Exploit-Plus-2.5-SNAPSHOT-all.jar" \
+      -o /opt/jndi-exploit-plus.jar; \
+    curl -fsSL "https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh" -o /opt/linpeas.sh; \
+    chmod +x /opt/linpeas.sh; \
+    curl -fsSL "https://github.com/peass-ng/PEASS-ng/releases/latest/download/winPEASx64.exe" -o /opt/winPEASx64.exe; \
+    curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch}" \
+      -o /usr/local/bin/cloudflared; \
+    chmod +x /usr/local/bin/cloudflared; \
+    curl -fsSL "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-${arch}.zip" -o /tmp/ngrok.zip; \
+    unzip -q /tmp/ngrok.zip -d /usr/local/bin; rm /tmp/ngrok.zip; \
+    curl -fsSL https://rclone.org/install.sh | bash; \
+    curl -fsSL "https://downloads.mongodb.com/compass/mongosh-2.5.6-linux-${arch}.tgz" -o /tmp/mongosh.tgz; \
+    tar -xzf /tmp/mongosh.tgz -C /opt; \
+    ln -s "/opt/mongosh-2.5.6-linux-${arch}/bin/mongosh" /usr/local/bin/mongosh; \
+    rm /tmp/mongosh.tgz
+
+# --- Python tools -------------------------------------------------------------
+RUN pipx install semgrep \
+    && pipx install certipy-ad \
+    && pipx install pwncat-cs \
+    && pipx install impacket
+
+# Nuclei templates and the exploit-db index, baked in so missions start warm.
+RUN nuclei -update-templates -silent || true
+RUN searchsploit -u >/dev/null 2>&1 || true
+
+WORKDIR /app
+COPY dist/${TARGETARCH}/artex /app/artex
+COPY start.sh /app/start.sh
+COPY scripts/tool-versions.sh /opt/tool-versions.sh
+RUN chmod +x /app/artex /app/start.sh /opt/tool-versions.sh
+COPY skills/ /app/skills/
+
+RUN useradd -m -s /bin/bash artex \
+    && mkdir -p /work /loot /app/data \
+    && chown -R artex:artex /work /loot /app
+USER artex
+WORKDIR /work
+
+LABEL org.opencontainers.image.title="artex-offsec" \
+      org.opencontainers.image.description="ARTEX autonomous offensive mission image"
+
+VOLUME ["/app/data"]
+EXPOSE 8787 8788
+ENTRYPOINT ["/app/start.sh"]
+CMD ["-addr", ":8787", "-proxy", ":8788"]
