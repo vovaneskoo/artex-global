@@ -54,6 +54,8 @@ mkdir -p "$CTX/dist/$ARCH" "$CTX/skills" "$CTX/scripts"
 cp "dist/$ARCH/artex" "$CTX/dist/$ARCH/artex"
 rsync -a skills/ "$CTX/skills/"
 cp scripts/tool-versions.sh "$CTX/scripts/"
+mkdir -p "$CTX/scripts/osint"
+cp scripts/osint/recon.sh "$CTX/scripts/osint/"
 tar -C "$CTX" -cf "$CTX/ctx.tar" .
 
 echo "[*] building $TAG in $VM"
