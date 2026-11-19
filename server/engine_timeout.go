@@ -92,6 +92,7 @@ func (e *Engine) resetTimeoutRevival(taskID string) {
 	e.deadline.Delete(taskID)
 	e.stamped.Delete(taskID)
 	e.coordStarted.Delete(taskID)
+	e.distillDone.Delete(taskID) // 复活后的下一次终局仍可蒸馏一次
 }
 
 // stampFirstRun records first_run_at + deadline_at on the FIRST real run (LLM ready)
@@ -290,6 +291,8 @@ func (e *Engine) settleTask(ctx context.Context, t *Task) {
 		log.Printf("[deadline] task %s 收尾完成,终态=%s", t.ID, status)
 		// 终态落定 → 后台自动生成「下一步」洞察(异步不阻塞收尾;详见 insights.go)
 		e.generateTerminalInsights(t, status)
+		// 终态落定 → 后台蒸馏经验候选入队(queue-only,异步;详见 distill_auto.go)
+		e.autoDistillTerminal(t, status)
 	default:
 		log.Printf("[deadline] task %s 收尾时已是终态,保留原状态", t.ID)
 	}

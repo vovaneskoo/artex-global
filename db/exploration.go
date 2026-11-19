@@ -833,6 +833,36 @@ WHERE exploration_id=$1 AND kind='intent' AND state='open'`, s.expID).Scan(&n)
 	return n, err
 }
 
+// CountByKind counts this exploration's nodes of one kind (no summary filter).
+// The terminal distill summary (server/distill_auto.go) uses it for the fact
+// count without materializing node payloads.
+func (s *ExplorationStore) CountByKind(kind string) (int, error) {
+	return s.countByKindFiltered(kind, "")
+}
+
+// IntentStateCounts groups this exploration's intents by state in one query, for
+// callers that need several per-state counters (done/exhausted/blocked, ...) at
+// once — e.g. the terminal distill summary — instead of repeating single-state
+// Count* scans.
+func (s *ExplorationStore) IntentStateCounts() (map[string]int, error) {
+	rows, err := s.db.Query(`SELECT state, COUNT(*) FROM exploration_nodes
+WHERE exploration_id=$1 AND kind='intent' GROUP BY state`, s.expID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var state string
+		var n int
+		if err := rows.Scan(&state, &n); err != nil {
+			return nil, err
+		}
+		out[state] = n
+	}
+	return out, rows.Err()
+}
+
 // GetNode returns one node of this exploration by id (nil, nil if not found).
 func (s *ExplorationStore) GetNode(id int64) (*Node, error) {
 	n, err := scanNode(s.db.QueryRow(`SELECT `+nodeCols+` FROM exploration_nodes WHERE id=$1 AND exploration_id=$2`, id, s.expID))

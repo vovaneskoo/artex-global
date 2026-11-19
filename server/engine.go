@@ -169,11 +169,26 @@ type Engine struct {
 	// Ready()/the llm_configured indicator. Wired once at startup; nil → not ready.
 	readiness func() bool
 
+	// retestLauncher starts a finding retest through the server-owned conversation
+	// path (Server.launchFindingRetest — the exact route of the API handler). Wired
+	// once at startup like resolve/readiness; nil → the auto-retest loop
+	// (retest_auto.go) stays idle, e.g. in engine-only test contexts.
+	retestLauncher func(ctx context.Context, findingID int64, notes string) (bool, error)
+
+	// autoRetestOn guards the single process-wide auto-retest loop, started lazily
+	// and idempotently from Run (see retest_auto.go).
+	autoRetestOn atomic.Bool
+
 	// insights: кэш готовых ответов «что дальше» (60s TTL), см. insights.go —
 	// общий для HTTP-эндпоинта и терминальной автогенерации, чтобы двойной выстрел
 	// (timeout-путь + planner-met) не дублировал LLM-вызов и activity.
 	insightsMu    sync.Mutex
 	insightsCache map[int64]insightsCacheEntry
+
+	// distill: терминальный автодистилл уже отработал для задачи — дедуп двойного
+	// выстрела (timeout-путь + planner-met). Сбрасывается при revival задачи
+	// (resetTimeoutRevival) и в StopTask. Сам автодистилл — в distill_auto.go.
+	distillDone sync.Map // taskID -> bool
 }
 
 type taskRuntime struct {
@@ -309,6 +324,7 @@ func (e *Engine) StopTask(taskID string) {
 	e.stamped.Delete(taskID)
 	e.inflight.Delete(taskID)
 	e.coordStarted.Delete(taskID)
+	e.distillDone.Delete(taskID)
 	e.deleteMu.Lock()
 	e.deleting.Delete(taskID)
 	e.deleteMu.Unlock()
@@ -743,6 +759,15 @@ func (e *Engine) appendActivity(t *Task, r db.Activity) (int64, error) {
 // Ready() / the llm_configured indicator). Called once at startup.
 func (e *Engine) SetReadiness(fn func() bool) { e.readiness = fn }
 
+// SetRetestLauncher wires the retest start path used by the auto-retest scheduler
+// (retest_auto.go): the server installs its launchFindingRetest here, so the
+// scheduler reuses the API handler's exact route (preconditions, lock order,
+// chatBusy, retester agent) without the engine holding a *Server. Called once at
+// startup; nil keeps the scheduler idle.
+func (e *Engine) SetRetestLauncher(fn func(ctx context.Context, findingID int64, notes string) (bool, error)) {
+	e.retestLauncher = fn
+}
+
 // SetAgentResolver installs a per-task planner/worker resolver (wired by the server).
 // Called once at startup before any task loop runs, so no lock is needed on reads.
 func (e *Engine) SetAgentResolver(fn func(t *Task) (*agent.Planner, *agent.Worker)) {
@@ -809,6 +834,10 @@ func (e *Engine) Run(ctx context.Context, t *Task) {
 		runTaskRoutine(rt, func(loopCtx context.Context) { e.workerLoop(loopCtx, t, name) })
 	}
 	e.startDeadlineCoordinator(ctx, t) // 任务级超时+停滞收尾定时器(去重)
+	// 进程级自动复测循环(retest_auto.go):懒启动、整个进程一条 goroutine,ctx=
+	// 根上下文,重复调用为 no-op。与任务无关,刻意不注册进 taskRuntime——
+	// StopTask отдельной задачи не должен останавливать общий цикл.
+	e.startAutoRetestLoop(ctx)
 	// 仅在「完全没有活动意图(open+running)」时才 kick 首轮规划。带种子意图的任务:种子已
 	// 是 open,或已被上面刚起的 worker 抢先 claim 成 running——两种都算「有活干」,一律跳过
 	// 首轮 planner,worker 直接领种子意图开跑,跑完由 NotifyDone/心跳唤醒 planner。
@@ -934,6 +963,8 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 			} else {
 				// 终态 → 后台自动生成「下一步」洞察(异步不阻塞规划轮;详见 insights.go)
 				e.generateTerminalInsights(t, "done")
+				// 终态 → 后台蒸馏经验候选入队(queue-only,异步;详见 distill_auto.go)
+				e.autoDistillTerminal(t, "done")
 			}
 			// 任务已判完成 → 立刻取消在跑的 worker：它们手头的意图跑出来也没意义了。
 			// 下一轮 worker 循环撞终态门就不再领新意图;被取消的这批走下方"任务已完成"分支

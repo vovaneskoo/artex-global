@@ -217,6 +217,12 @@ func (s *Server) admitTaskWhen(t *Task, mode string, requirePaused bool) (queued
 		// otherwise the old settling flag would make every worker skip forever.
 		s.engine.resetTimeoutRevival(t.ID)
 	}
+	if wasTerminal && status == "running" {
+		// Revival from ANY terminal state (done included, not only timeout) re-arms
+		// terminal one-shots: without this, a task revived from done and finished
+		// again would never distill its second run (distillDone still set).
+		s.engine.distillDone.Delete(t.ID)
+	}
 	if shouldQueue {
 		if !wasQueued {
 			summary := fmt.Sprintf(queuedConcurrencyLimitSummaryFmt, limit)
