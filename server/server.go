@@ -276,6 +276,13 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		defer s.cfgMu.Unlock()
 		return s.llmOn
 	})
+	// Автопретесты (server/retest_auto.go): цикл на Engine дёргает ровно тот же
+	// серверный путь запуска ретеста, что и POST /api/exploration/findings/{id}/
+	// retests, — движку отдаётся только эта функция, без *Server.
+	s.engine.SetRetestLauncher(func(ctx context.Context, findingID int64, notes string) (bool, error) {
+		_, created, err := s.launchFindingRetest(ctx, findingID, notes)
+		return created, err
+	})
 	// Wire DB-stored prompt templates into the agents (新版方案 §3.3 / §5a). With no
 	// override row, agents keep their built-in defaults — behavior is unchanged.
 	if m.pg != nil {
@@ -346,6 +353,11 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		go s.evidenceStore().RunGC(s.ctx)
 		s.seedPythonInterpreter()     // 自定义脚本工具:开机检测 python 解释器入库(仅空时)
 		go newScheduler(s).Run(s.ctx) // P3 触发器调度(定时/finding/目标事件),仅自定义 agent
+		// Автопретесты стартуют на бутче безусловно (не только при первом Engine.Run):
+		// «пентест закончился, все задачи терминальные, ждём перепроверки через N дней» —
+		// ровно тот сценарий, ради которого планировщик существует; ленивый старт из
+		// Engine.Run остаётся как страховка для тестовых контекстов (CAS-идемпотентно).
+		s.engine.startAutoRetestLoop(s.ctx)
 		// 漏洞 IM 推送投递引擎。与 Scheduler 并列但独立：推送的实时性要求(3s)
 		// 与触发器的业务节奏不同，且两者失败互不牵连——推送卡住不该影响 agent 触发。
 		// 통합 테스트는 stepRealtime·stepDigest 를 직접 호출해 분배를 결정론적으로

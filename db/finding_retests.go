@@ -142,6 +142,53 @@ func (r *FindingRetest) InitialMessage() string {
 	return msg
 }
 
+// FindingsDueForRetest returns up to limit confirmed findings that are due for a
+// retest: the finding itself is older than afterDays days AND no retest of it
+// exists from the last afterDays days (a never-retested finding becomes eligible
+// only once the finding has aged past the window, so a fresh confirmation is not
+// instantly re-fired). An active retest (pending/running) always disqualifies the
+// finding — the partial unique index already blocks a second active run, but
+// skipping it here keeps the scheduler from wasting its single per-pass slot.
+//
+// 自动复测只挑「已确认」的漏洞：其余 triage 状态(pending/fixed/误报…)不经自动
+// 复测；fixed 的复验本就走 verdict='fixed' 的正常闭环。复测本身是 retester 会话
+// 而非任务，retester 只有两个复测工具、不会产生新 findings，所以「复测的复测」
+// 在结构上不可能发生，这里无需按任务/描述排除什么；自动发起的复测在 notes 里
+// 带 server 侧的固定标记(server/retest_auto.go)以便人工区分。Oldest first：最久
+// 未复测的排最前。
+func (d *DB) FindingsDueForRetest(ctx context.Context, afterDays, limit int) ([]int64, error) {
+	if afterDays < 0 {
+		afterDays = 0
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	rows, err := d.QueryContext(ctx, `
+		SELECT f.id FROM findings f
+		WHERE f.status = '`+FindingConfirmed+`'
+		  AND f.created_at <= now() - make_interval(days => $1::int)
+		  AND NOT EXISTS (
+			SELECT 1 FROM finding_retests r
+			WHERE r.finding_id = f.id
+			  AND (r.status IN ('pending','running')
+			       OR r.created_at > now() - make_interval(days => $1::int)))
+		ORDER BY f.created_at, f.id
+		LIMIT $2`, afterDays, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func (d *DB) ListFindingRetests(findingID int64) ([]*FindingRetest, error) {
 	rows, err := d.Query(`SELECT `+retestCols+` FROM finding_retests WHERE finding_id=$1 ORDER BY id DESC`, findingID)
 	if err != nil {
