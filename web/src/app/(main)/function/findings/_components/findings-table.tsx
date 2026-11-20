@@ -146,7 +146,7 @@ export function FindingsTable({
 
   return (
     /* 固定列宽保证展开内容不撑开表格；窄屏只在表格内部横向滚动。 */
-    <Table className="min-w-[60rem] table-fixed">
+    <Table className="min-w-[84rem] table-fixed">
       <TableHeader>
         <TableRow>
           <TableHead className="w-8">
@@ -157,13 +157,13 @@ export function FindingsTable({
             />
           </TableHead>
           <TableHead className="w-8" />
-          <TableHead className="w-20">{t("table.colSeverity")}</TableHead>
+          <TableHead className="w-32">{t("table.colSeverity")}</TableHead>
           <TableHead>{t("table.colName")}</TableHead>
           <TableHead className="w-44">{t("table.colAsset")}</TableHead>
-          <TableHead className="w-28">{t("table.colStatus")}</TableHead>
+          <TableHead className="w-44">{t("table.colStatus")}</TableHead>
           <TableHead className="w-32">{t("table.colTask")}</TableHead>
-          <TableHead className="w-24">{t("table.colTime")}</TableHead>
-          <TableHead className="w-48">{t("table.colActions")}</TableHead>
+          <TableHead className="w-28">{t("table.colTime")}</TableHead>
+          <TableHead className="w-[19rem]">{t("table.colActions")}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -244,7 +244,7 @@ export function FindingsTable({
                   {f.finding_id ? (
                     <Select value={f.status} onValueChange={(v) => onStatusChange(f, v as FindingStatus)}>
                       <SelectTrigger size="sm" className="h-7 w-full border-none px-1 shadow-none focus-visible:ring-0">
-                        <StatusBadge domain="finding" value={f.status} dot />
+                        <StatusBadge domain="finding" value={f.status} dot className="min-w-0" />
                       </SelectTrigger>
                       <SelectContent position="popper" align="end">
                         {FINDING_STATUSES.map((st) => (
