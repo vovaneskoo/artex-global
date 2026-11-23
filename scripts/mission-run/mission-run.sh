@@ -40,7 +40,7 @@ cmd_up() {
     sh "sudo mkdir -p /var/lib/artex-mission && sudo chown -R 1000:1000 /var/lib/artex-mission
         sudo docker rm -f $NAME >/dev/null 2>&1 || true
         sudo docker run -d --name $NAME --network host --restart unless-stopped \
-          -e ARTEX_PG_DSN='$DSN' -e ARTEX_STRICT_SCOPE=1 -v /var/lib/artex-mission:/app/data \
+          -e ARTEX_PG_DSN='$DSN' -v /var/lib/artex-mission:/app/data \
           $IMAGE -addr :$PORT -proxy :$PROXY" >/dev/null
     for i in $(seq 1 30); do health && break || sleep 2; done
     health || { echo "MISSION ENGINE failed to become healthy" >&2; exit 1; }
