@@ -13,10 +13,13 @@ import (
 
 // fakeScopeSource stands in for the pg-backed source: unit tests never touch pg.
 type fakeScopeSource struct {
-	list  *ScopeAllowList
-	err   error
-	calls int
+	list        *ScopeAllowList
+	err         error
+	calls       int
+	destructive bool
 }
+
+func (f *fakeScopeSource) TaskDestructive(int64) bool { return f.destructive }
 
 func (f *fakeScopeSource) TaskScope(int64) (*ScopeAllowList, error) {
 	f.calls++
@@ -251,4 +254,26 @@ func TestStrictScopeEnvGateAndDeny(t *testing.T) {
 			t.Fatal("WebFetch to an out-of-scope host must be blocked")
 		}
 	})
+}
+
+// TestTaskDestructiveGate: destructive 플래그는 태스크 컨텍스트가 있을 때만
+// 조회되고, 조회 실패/컨텍스트 부재/소스 미배선이면 false로 fail-safe 한다.
+func TestTaskDestructiveGate(t *testing.T) {
+	taskCtx := intercept.WithTaskContext(context.Background(), "7", "worker-1", nil)
+	on := New()
+	on.SetScopeSource(&fakeScopeSource{destructive: true})
+	if !on.taskDestructive(taskCtx) {
+		t.Fatal("destructive task must report true")
+	}
+	if on.taskDestructive(context.Background()) {
+		t.Fatal("no task context must report false")
+	}
+	if (&Guard{}).taskDestructive(taskCtx) {
+		t.Fatal("unwired source must report false")
+	}
+	off := New()
+	off.SetScopeSource(&fakeScopeSource{})
+	if off.taskDestructive(taskCtx) {
+		t.Fatal("non-destructive task must report false")
+	}
 }

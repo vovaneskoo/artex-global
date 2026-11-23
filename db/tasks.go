@@ -57,6 +57,10 @@ type Task struct {
 	// recon|standard|full|custom。custom 时 AllowedSkills 生效。见 db/schema.sql §D。
 	SkillsMode    string   `json:"skills_mode"`
 	AllowedSkills []string `json:"allowed_skills,omitempty"` // custom 模式的技能白名单;nil=未设置
+	// Destructive 是任务级「破坏 허용」플래그. true면 guard가 builtin deny 규칙
+	// (rm -rf / DROP / TRUNCATE / FLUSHALL / HTTP DELETE 등)을 통과시킨다.
+	// 플랫폼 스코프(strict scope, ARTEX_STRICT_SCOPE)는 별도 경로라 무관하다.
+	Destructive bool `json:"destructive"`
 }
 
 // TaskDeleteResult reports optional related-data cleanup performed in the same
@@ -221,6 +225,9 @@ type TaskCreateOptions struct {
 	// 与 custom 模式的技能白名单;空名单落库为 NULL。见 db/schema.sql §D。
 	SkillsMode    string
 	AllowedSkills []string
+	// Destructive 任务级破坏 허용 플래그(기본 false). guard 의 builtin deny 규칙을
+	// 이 태스크에서만 통과시킨다. strict scope 와는 독립.
+	Destructive bool
 }
 
 // CreateTaskWithOptions creates an exploration, task, direct source relations,
@@ -301,11 +308,12 @@ VALUES ($1, 'fact', $2, 0, 'origin', 'system')`, expID, string(originPayload)); 
 		TimeoutSeconds: opts.TimeoutSeconds, PlanHeartbeatSeconds: opts.PlanHeartbeatSeconds,
 		CoverageEnabled: coverageEnabled,
 		SkillsMode:      skillsMode, AllowedSkills: allowedSkills,
+		Destructive: opts.Destructive,
 	}
 	if err := tx.QueryRow(`
-INSERT INTO tasks(name, category_id, description, goal, exploration_id, llm_profile_id, active_llm_profile_id, timeout_seconds, plan_heartbeat_seconds, coverage_enabled, skills_mode, allowed_skills)
-VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8,$9,$10,$11)
-RETURNING id, status, paused, created_at`, opts.Name, opts.CategoryID, description, goal, expID, active, opts.TimeoutSeconds, opts.PlanHeartbeatSeconds, coverageEnabled, skillsMode, allowedSkillsJSON).Scan(&t.ID, &t.Status, &t.Paused, &t.CreatedAt); err != nil {
+INSERT INTO tasks(name, category_id, description, goal, exploration_id, llm_profile_id, active_llm_profile_id, timeout_seconds, plan_heartbeat_seconds, coverage_enabled, skills_mode, allowed_skills, destructive)
+VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8,$9,$10,$11,$12)
+RETURNING id, status, paused, created_at`, opts.Name, opts.CategoryID, description, goal, expID, active, opts.TimeoutSeconds, opts.PlanHeartbeatSeconds, coverageEnabled, skillsMode, allowedSkillsJSON, opts.Destructive).Scan(&t.ID, &t.Status, &t.Paused, &t.CreatedAt); err != nil {
 		return nil, err
 	}
 	if err := insertTaskRelations(tx, t.ID, opts.SourceTaskIDs); err != nil {
@@ -421,12 +429,12 @@ func insertTaskLLMProfiles(tx *sql.Tx, taskID int64, profileIDs []int64) error {
 
 const taskCols = `id, COALESCE(name,''), category_id,
 COALESCE((SELECT category.name FROM task_categories category WHERE category.id=tasks.category_id),''),
-description, goal, exploration_id, status, paused, queued, queued_at, COALESCE(queue_mode,''), llm_profile_id, active_llm_profile_id, COALESCE(parent_ref,''), pinned_at, created_at, completed_at, COALESCE(timeout_seconds,0), COALESCE(plan_heartbeat_seconds,300), COALESCE(coverage_enabled,true), first_run_at, deadline_at, COALESCE(skills_mode,''), allowed_skills`
+description, goal, exploration_id, status, paused, queued, queued_at, COALESCE(queue_mode,''), llm_profile_id, active_llm_profile_id, COALESCE(parent_ref,''), pinned_at, created_at, completed_at, COALESCE(timeout_seconds,0), COALESCE(plan_heartbeat_seconds,300), COALESCE(coverage_enabled,true), first_run_at, deadline_at, COALESCE(skills_mode,''), allowed_skills, destructive`
 
 func scanTask(sc interface{ Scan(...any) error }) (*Task, error) {
 	var t Task
 	var allowedRaw []byte
-	if err := sc.Scan(&t.ID, &t.Name, &t.CategoryID, &t.CategoryName, &t.Description, &t.Goal, &t.ExplorationID, &t.Status, &t.Paused, &t.Queued, &t.QueuedAt, &t.QueueMode, &t.LLMProfileID, &t.ActiveLLMProfileID, &t.ParentRef, &t.PinnedAt, &t.CreatedAt, &t.CompletedAt, &t.TimeoutSeconds, &t.PlanHeartbeatSeconds, &t.CoverageEnabled, &t.FirstRunAt, &t.DeadlineAt, &t.SkillsMode, &allowedRaw); err != nil {
+	if err := sc.Scan(&t.ID, &t.Name, &t.CategoryID, &t.CategoryName, &t.Description, &t.Goal, &t.ExplorationID, &t.Status, &t.Paused, &t.Queued, &t.QueuedAt, &t.QueueMode, &t.LLMProfileID, &t.ActiveLLMProfileID, &t.ParentRef, &t.PinnedAt, &t.CreatedAt, &t.CompletedAt, &t.TimeoutSeconds, &t.PlanHeartbeatSeconds, &t.CoverageEnabled, &t.FirstRunAt, &t.DeadlineAt, &t.SkillsMode, &allowedRaw, &t.Destructive); err != nil {
 		return nil, err
 	}
 	if len(allowedRaw) > 0 {
@@ -754,4 +762,15 @@ DELETE FROM assets a USING deletable d WHERE a.id=d.id`, id, expID)
 		return result, err
 	}
 	return result, tx.Commit()
+}
+
+// TaskDestructive reports whether a task allows destructive operations
+// (builtin deny intercept rules are bypassed for it). Missing/deleted task
+// reads as false. Called only when a deny rule fires, so no caching needed.
+func (d *DB) TaskDestructive(taskID int64) bool {
+	var v bool
+	if err := d.QueryRow(`SELECT destructive FROM tasks WHERE id=$1 AND deleted_at IS NULL`, taskID).Scan(&v); err != nil {
+		return false
+	}
+	return v
 }

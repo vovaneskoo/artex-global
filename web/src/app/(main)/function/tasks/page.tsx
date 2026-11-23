@@ -3189,6 +3189,7 @@ function CreateTaskSheet({
   const [heartbeatMin, setHeartbeatMin] = React.useState("10"); // planner 心跳(分钟);默认10,下限10(与后端一致)
   const [seedFirstIntent, setSeedFirstIntent] = React.useState(false); // 创建时下发种子意图,worker 免等首轮 planner 直接开跑;默认关闭,走标准先规划再执行
   const [coverageEnabled, setCoverageEnabled] = React.useState(true); // 资产覆盖度功能;默认开。关闭=不计算/展示覆盖度、不累积范围、隐藏范围类工具(company 关联不受影响)
+  const [destructive, setDestructive] = React.useState(false); // destructive миссия:绕过 builtin deny 规则;默认关(осторожный режим)
   const [interceptRules, setInterceptRules] = React.useState<AssetInterceptRuleInput[]>([]); // 任务级资产拦截规则(仅本任务生效,不进全局表)
   // 方式1 文件上传:建任务前把文件暂存到 drafts/<draftId>/uploads/,拿回绝对路径追加进描述。
   const [uploading, setUploading] = React.useState(false);
@@ -3264,6 +3265,7 @@ function CreateTaskSheet({
         seedFirstIntent,
         planHeartbeatSeconds: heartbeatSec,
         coverageEnabled,
+        destructive,
         interceptRules: interceptRules
           .map((r) => ({ ...r, pattern: r.pattern.trim() }))
           .filter((r) => r.pattern !== ""),
@@ -3285,6 +3287,7 @@ function CreateTaskSheet({
       setHeartbeatMin("10");
       setSeedFirstIntent(false);
       setCoverageEnabled(true);
+      setDestructive(false);
       setInterceptRules([]);
       setUploadCount(0);
       draftIdRef.current = "";
@@ -3503,6 +3506,17 @@ function CreateTaskSheet({
                     {t("create.coverageLabel")}
                   </label>
                   <p className="text-muted-foreground text-xs">{t("create.coverageHint")}</p>
+                </div>
+                <div className="grid gap-2">
+                  <label htmlFor="task-destructive" className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      id="task-destructive"
+                      checked={destructive}
+                      onCheckedChange={(v) => setDestructive(!!v)}
+                    />
+                    {t("create.destructiveLabel")}
+                  </label>
+                  <p className="text-muted-foreground text-xs">{t("create.destructiveHint")}</p>
                 </div>
               </CollapsibleContent>
             </Collapsible>

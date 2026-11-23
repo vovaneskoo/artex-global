@@ -2740,6 +2740,8 @@
       "seedHint": "When on, right after creation it dispatches \"description + goal\" as a single intent so the worker starts immediately without waiting for the first planning round; when it finishes, the planner takes over to assess and follow up. Recommended for cases usually solved by a single work, like CTF; when off, it follows the standard flow of planning first, then executing.",
       "coverageLabel": "Asset coverage feature",
       "coverageHint": "On by default. It calculates and displays test coverage, shows testing progress on the situation map, and automatically accumulates the tested scope. When off, coverage is no longer calculated or displayed, the situation map shows only assets without progress, and the agent no longer receives scope-related tools. Turning it off does not affect \"Linked company asset scope\".",
+      "destructiveLabel": "Destructive mission",
+      "destructiveHint": "Allow irreversible target-side actions (rm -rf, DROP/TRUNCATE, FLUSHALL, HTTP DELETE). Builtin deny rules are bypassed for this task only. Scope stays separate.",
       "cancel": "Cancel",
       "creating": "Creating",
       "create": "Create",

@@ -333,6 +333,7 @@ func matchAllowedDomain(domains []string, host string) bool {
 // implementation; tests inject fakes.
 type ScopeSource interface {
 	TaskScope(taskID int64) (*ScopeAllowList, error)
+	TaskDestructive(taskID int64) bool
 }
 
 // SetScopeSource installs the allow-list source for strict-scope enforcement.
@@ -396,6 +397,20 @@ func (g *Guard) applyStrictScope(ctx context.Context, ev hook.Event, cmd string)
 	return hook.Result{}, false
 }
 
+// taskDestructive reports whether the task in ctx opted into destructive
+// operations (tasks.destructive). It gates the builtin deny intercept rules
+// only — strict scope runs on its own path and stays active regardless.
+func (g *Guard) taskDestructive(ctx context.Context) bool {
+	if g.scopeSrc == nil {
+		return false
+	}
+	id, err := strconv.ParseInt(intercept.TaskIDFromContext(ctx), 10, 64)
+	if err != nil || id <= 0 {
+		return false
+	}
+	return g.scopeSrc.TaskDestructive(id)
+}
+
 // logScopeDecision mirrors a scope denial into the intercept history (status
 // "denied", RuleID 0 — the decision comes from platform scope, not a rule), so
 // out-of-scope blocks are visible on the same review pages as rule denials.
@@ -430,6 +445,10 @@ type scopeCacheEntry struct {
 // NewDBScopeSource returns a ScopeSource backed by pg. Safe for concurrent use.
 func NewDBScopeSource(pg *db.DB) ScopeSource {
 	return &dbScopeSource{pg: pg, cache: map[int64]scopeCacheEntry{}}
+}
+
+func (s *dbScopeSource) TaskDestructive(taskID int64) bool {
+	return s.pg.TaskDestructive(taskID)
 }
 
 func (s *dbScopeSource) TaskScope(taskID int64) (*ScopeAllowList, error) {

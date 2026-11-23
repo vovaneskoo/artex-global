@@ -63,6 +63,7 @@ type TaskDTO struct {
 	CoverageEnabled    bool               `json:"coverage_enabled"` // 资产覆盖度功能开关(创建时定)
 	SkillsMode         string             `json:"skills_mode"`      // 任务技能功率模式(''=继承;recon|standard|full|custom)
 	AllowedSkills      []string           `json:"allowed_skills"`   // custom 模式的技能白名单
+	Destructive        bool               `json:"destructive"`      // 任务级破坏 허용(绕过 builtin deny 규칙)
 }
 
 // FindingSeverityDTO 是任务列表里按严重度分档的漏洞计数（严重/高/中/低）。
@@ -138,6 +139,7 @@ func taskDTO(t *Task, status string) TaskDTO {
 		CoverageEnabled:    t.CoverageEnabled,
 		SkillsMode:         t.SkillsMode,
 		AllowedSkills:      t.AllowedSkills,
+		Destructive:        t.Destructive,
 	}
 }
 

@@ -107,6 +107,13 @@ func (g *Guard) applyIntercept(ctx context.Context, ev hook.Event) hook.Result {
 	}
 	switch dec.Action {
 	case "deny":
+		// Destructive 태스크는 builtin deny 규칙을 통과한다(파괴 허용 룰셋).
+		// 통과도 감사 흔적을 남긴다 — allowed + 원래 deny 사유.
+		if g.taskDestructive(ctx) {
+			dec.Message = "destructive 태스크: " + dec.Message
+			g.interceptor.Log(ctx, intercept.ConvIDFromContext(ctx), dec, ev.ToolName, ev.Input, "allowed")
+			return hook.Result{}
+		}
 		// 观测:deny 命中不阻塞审批,直接记一条 denied（历史/任务拦截页可见）。
 		g.interceptor.Log(ctx, intercept.ConvIDFromContext(ctx), dec, ev.ToolName, ev.Input, "denied")
 		return g.block(ev.ToolName, systemBlockMessage(dec.Message), "")

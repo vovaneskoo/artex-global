@@ -2740,6 +2740,8 @@
       "seedHint": "Cuando está activado, justo después de la creación envía «descripción + objetivo» como una sola intención para que el worker empiece de inmediato sin esperar a la primera ronda de planificación; al terminar, el planner toma el relevo para evaluar y complementar. Se recomienda para casos que suelen resolverse con un solo work, como CTF; cuando está desactivado, sigue el flujo estándar de planificar primero y ejecutar después.",
       "coverageLabel": "Función de cobertura de activos",
       "coverageHint": "Activado por defecto. Calcula y muestra la cobertura de pruebas, muestra el progreso de las pruebas en el mapa de situación y acumula automáticamente el alcance probado. Cuando está desactivado, la cobertura ya no se calcula ni se muestra, el mapa de situación muestra solo los activos sin el progreso, y el agent ya no recibe herramientas relacionadas con el alcance. Desactivarlo no afecta al «Alcance de activos de la empresa vinculada».",
+      "destructiveLabel": "Misión destructiva",
+      "destructiveHint": "Permitir acciones irreversibles en el objetivo (rm -rf, DROP/TRUNCATE, FLUSHALL, HTTP DELETE). Las reglas de bloqueo integradas se omiten solo para esta tarea. El alcance es independiente.",
       "cancel": "Cancelar",
       "creating": "Creando",
       "create": "Crear",

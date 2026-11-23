@@ -1390,3 +1390,7 @@ CREATE INDEX IF NOT EXISTS idx_notification_deliveries_batch
     ON notification_deliveries(batch_id) WHERE batch_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_notification_deliveries_channel
     ON notification_deliveries(channel_id, id DESC);
+-- destructive: 태스크 단위 파괴 허용 플래그. 켜지면 guard 가 builtin deny 규칙
+-- (rm -rf / DROP / TRUNCATE / FLUSHALL / HTTP DELETE 등)을 통과시킨다.
+-- 플랫폼 스코프(strict scope)는 별도 경로라 이 플래그와 무관하다.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS destructive BOOLEAN NOT NULL DEFAULT false;

@@ -1663,6 +1663,7 @@ type createTaskReq struct {
 	CoverageEnabled      *bool    `json:"coverage_enabled,omitempty"`  // 资产覆盖度功能;省略/null=默认开(true)。false=关闭覆盖度计算/展示/自动累积范围+隐藏 add_task_scope/list_untested_assets。company 关联不受影响。
 	SkillsMode           string   `json:"skills_mode,omitempty"`       // 任务技能功率模式;省略/''=继承 agent 可见全部技能;recon|standard|full|custom
 	AllowedSkills        []string `json:"allowed_skills,omitempty"`    // custom 模式的技能白名单;trim+去重后上限 64 个,仅 custom 模式可带
+	Destructive          bool     `json:"destructive,omitempty"`       // 任务级破坏 허용;true=本任务绕过 builtin deny 规则(rm -rf/DROP/TRUNCATE/FLUSHALL/HTTP DELETE 等),strict scope 는 별개
 	// InterceptRules 任务级资产拦截/允许规则(创建时录入,存 task_intercept_rules,不进全局表)。
 	InterceptRules []taskInterceptRuleReq `json:"intercept_rules,omitempty"`
 }
@@ -1755,6 +1756,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		TimeoutSeconds: timeoutSeconds, PlanHeartbeatSeconds: req.PlanHeartbeatSeconds,
 		CoverageEnabled: req.CoverageEnabled,
 		SkillsMode:      req.SkillsMode, AllowedSkills: allowedSkills,
+		Destructive:    req.Destructive,
 		InterceptRules: interceptRules,
 	})
 	if err != nil {
