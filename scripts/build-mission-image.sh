@@ -62,3 +62,10 @@ echo "[*] building $TAG in $VM"
 limactl shell "$VM" -- sudo docker build -f "$DOCKERFILE" --build-arg "TARGETARCH=$ARCH" -t "$TAG" - < "$CTX/ctx.tar"
 
 echo "[+] built $TAG"
+
+# Rebuilds pile up dangling layers + exited containers quickly eat the 40G VM
+# disk (artex-mission hit 100% mid-run and PG started dropping activity rows).
+# Keep only the current image tag and running containers.
+limactl shell "$VM" -- sudo docker image prune -f >/dev/null
+limactl shell "$VM" -- sudo docker container prune -f >/dev/null
+echo "[+] pruned dangling images and stopped containers"
