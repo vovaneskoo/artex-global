@@ -56,3 +56,32 @@ func TestTaskTotalTokensSumsLedgerAcrossWorkersAndRestarts(t *testing.T) {
 		t.Fatalf("absent task total=%d err=%v, want 0/nil", missing, err)
 	}
 }
+
+// TestLatestProgressUnixNotBelowFindings guards the stagnation progress meter:
+// facts/assets broaden the anchor, so progress must never lag behind findings.
+func TestLatestProgressUnixNotBelowFindings(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) - skipping", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	var taskID int64
+	if err := d.QueryRow(`SELECT id FROM tasks ORDER BY id DESC LIMIT 1`).Scan(&taskID); err != nil {
+		t.Skipf("no tasks in test db (%v) - skipping", err)
+	}
+	var expID int64
+	if err := d.QueryRow(`SELECT exploration_id FROM tasks WHERE id=$1`, taskID).Scan(&expID); err != nil {
+		t.Skipf("tasks schema differs (%v) - skipping", err)
+	}
+	f, err := d.LatestFindingUnix(taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := d.LatestProgressUnix(taskID, expID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p < f {
+		t.Fatalf("progress %d < findings %d", p, f)
+	}
+}

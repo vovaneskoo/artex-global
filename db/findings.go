@@ -141,6 +141,27 @@ func (d *DB) LatestFindingUnix(taskID int64) (int64, error) {
 	return ts.Int64, nil
 }
 
+// LatestProgressUnix returns the epoch seconds of the task's most recent
+// PROGRESS artifact: a finding, or a fact/asset node written by the workers.
+// The stagnation guard uses this instead of findings-only: a long-running
+// brute/spray produces a steady stream of facts without new findings, and
+// judging it by findings alone kills healthy grinding work.
+func (d *DB) LatestProgressUnix(taskID, explorationID int64) (int64, error) {
+	var ts sql.NullInt64
+	err := d.QueryRow(`
+SELECT EXTRACT(EPOCH FROM MAX(created_at))::bigint
+FROM (
+  SELECT created_at FROM findings WHERE task_id=$1
+  UNION ALL
+  SELECT created_at FROM exploration_nodes
+   WHERE exploration_id=$2 AND kind IN ('fact','asset') AND created_at IS NOT NULL
+) progress`, taskID, explorationID).Scan(&ts)
+	if err != nil {
+		return 0, err
+	}
+	return ts.Int64, nil
+}
+
 // FindingsCount returns the number of findings recorded for a task. The engine's
 // pivot detector (server/engine_pivot.go) diffs it between planner rounds:
 // an unchanged count while workers keep finishing means the task is grinding

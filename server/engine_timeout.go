@@ -206,7 +206,7 @@ func (e *Engine) deadlineCoordinator(ctx context.Context, t *Task) {
 
 // stagnationSettle winds a task down through the ordinary settle sequence when it
 // has produced no findings for the configured window (manager.TaskStagnationWindow,
-// default 3h, 0=off). Progress signal is the newest finding row; a task with zero
+// default 3h, 0=off). Progress signal is the newest progress artifact (finding, or fact/asset node written by workers); a task with zero
 // findings is measured from its first real run (or creation), so a mission that
 // never finds anything also stops instead of idling forever. Guards:
 //   - goalless (chat-injected) tasks: lifecycle owned by the frontier drain;
@@ -231,8 +231,8 @@ func (e *Engine) stagnationSettle(ctx context.Context, t *Task) bool {
 		return false
 	}
 	var since time.Time
-	if unix, err := e.m.pg.LatestFindingUnix(taskNum); err != nil {
-		log.Printf("[stagnation] task %s latest-finding query failed: %v", t.ID, err)
+	if unix, err := e.m.pg.LatestProgressUnix(taskNum, t.ExpID); err != nil {
+		log.Printf("[stagnation] task %s latest-progress query failed: %v", t.ID, err)
 	} else if unix > 0 {
 		since = time.Unix(unix, 0)
 	}
