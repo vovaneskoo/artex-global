@@ -83,16 +83,19 @@ func (e *Engine) taskDeadline(t *Task) int64 {
 }
 
 // resetTimeoutRevival clears only the per-run timeout state after PostgreSQL has
-// atomically committed timeout -> running and reset first_run_at/deadline_at. The
-// configured TimeoutSeconds remains on Task, so the next real Planner/Worker run
-// stamps a fresh full budget. coordStarted is reset because the coordinator that
-// produced the timeout has already completed (or is in its final return path).
+// atomically committed terminal -> running. The configured TimeoutSeconds remains
+// on Task, so the next real Planner/Worker run stamps a fresh full budget.
+// coordStarted is reset because the coordinator that produced the terminal state
+// has already completed (or is in its final return path). revivedAt is stamped so
+// the stagnation guard grants the revived run a fresh window instead of judging it
+// by the (possibly hours old) last finding.
 func (e *Engine) resetTimeoutRevival(taskID string) {
 	e.settling.Delete(taskID)
 	e.deadline.Delete(taskID)
 	e.stamped.Delete(taskID)
 	e.coordStarted.Delete(taskID)
 	e.distillDone.Delete(taskID) // 复活后的下一次终局仍可蒸馏一次
+	e.revivedAt.Store(taskID, time.Now().Unix())
 }
 
 // stampFirstRun records first_run_at + deadline_at on the FIRST real run (LLM ready)
@@ -243,6 +246,11 @@ func (e *Engine) stagnationSettle(ctx context.Context, t *Task) bool {
 			}
 		}
 	}
+	var revived int64
+	if v, ok := e.revivedAt.Load(t.ID); ok {
+		revived, _ = v.(int64)
+	}
+	since = stagnationAnchor(since, revived)
 	if since.IsZero() || time.Since(since) < window {
 		return false
 	}
@@ -250,6 +258,18 @@ func (e *Engine) stagnationSettle(ctx context.Context, t *Task) bool {
 		t.ID, window, since.Format("2006-01-02 15:04:05"))
 	e.settleTask(ctx, t, agent.AbortSettleDrainTimeout)
 	return true
+}
+
+// stagnationAnchor picks the progress anchor for the stagnation guard: the newest
+// finding (or first run/creation fallback), unless an explicit revival is newer —
+// a revived task gets a full fresh window instead of being judged by old history.
+func stagnationAnchor(since time.Time, revivedUnix int64) time.Time {
+	if revivedUnix > 0 {
+		if rv := time.Unix(revivedUnix, 0); rv.After(since) {
+			return rv
+		}
+	}
+	return since
 }
 
 // budgetSettle winds a task down when its lifetime LLM token spend reaches the
@@ -302,6 +322,13 @@ func (e *Engine) settleTask(ctx context.Context, t *Task, cause error) {
 
 	// ⑤ 终局一轮 planner(任务超时词,最后目标判定,不产新意图)。
 	met := e.runFinalPlannerRound(ctx, t)
+	// Гонка с revival: пока шёл drain/финальный раунд, задачу могли возродить —
+	// resetTimeoutRevival снимает settling. В этом случае старый цикл не должен
+	// коммитить терминальный статус поверх свежего запуска.
+	if !e.isSettling(t.ID) {
+		log.Printf("[deadline] task %s 收尾期间已被复活,保留 running", t.ID)
+		return
+	}
 	if !e.beginTaskOperation(t.ID) {
 		return
 	}
@@ -312,6 +339,12 @@ func (e *Engine) settleTask(ctx context.Context, t *Task, cause error) {
 	status := "timeout"
 	if met {
 		status = "done"
+	}
+	// Последняя проверка перед коммитом: между предыдущим чеком и здесь revival
+	// мог снять settling — тогда не перетираем только что запущенную задачу.
+	if !e.isSettling(t.ID) {
+		log.Printf("[deadline] task %s 复活于终态提交前,保留 running", t.ID)
+		return
 	}
 	won, err := e.m.SetTaskStatusGuarded(t.ID, status)
 	switch {

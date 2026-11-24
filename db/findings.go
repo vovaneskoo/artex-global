@@ -134,7 +134,7 @@ func scanFindings(rows interface {
 // exactly the tail a wall-clock deadline cannot catch (timeout=0 missions).
 func (d *DB) LatestFindingUnix(taskID int64) (int64, error) {
 	var ts sql.NullInt64
-	err := d.QueryRow(`SELECT EXTRACT(EPOCH FROM MAX(created_at)) FROM findings WHERE task_id=$1`, taskID).Scan(&ts)
+	err := d.QueryRow(`SELECT EXTRACT(EPOCH FROM MAX(created_at))::bigint FROM findings WHERE task_id=$1`, taskID).Scan(&ts)
 	if err != nil {
 		return 0, err
 	}

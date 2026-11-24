@@ -211,13 +211,11 @@ func (s *Server) admitTaskWhen(t *Task, mode string, requirePaused bool) (queued
 		}
 		return false, err
 	}
-	if lifecycle.Status == "timeout" && status == "running" {
-		// ApplyTaskAdmission reset this timed-out run's persisted clock. Clear the
-		// matching Engine gates before either parking it in FIFO or starting work;
-		// otherwise the old settling flag would make every worker skip forever.
-		s.engine.resetTimeoutRevival(t.ID)
-	}
 	if wasTerminal && status == "running" {
+		// Revival из любого терминального статуса: снять Engine-гейты прошлого
+		// завершения (settling/дедлайн-кэш/сторожевой якорь), иначе воркеры
+		// пропускают работу, а сторожевой таймер застоя хоронит задачу сразу.
+		s.engine.resetTimeoutRevival(t.ID)
 		// Revival from ANY terminal state (done included, not only timeout) re-arms
 		// terminal one-shots: without this, a task revived from done and finished
 		// again would never distill its second run (distillDone still set).

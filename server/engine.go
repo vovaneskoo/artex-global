@@ -189,6 +189,11 @@ type Engine struct {
 	// выстрела (timeout-путь + planner-met). Сбрасывается при revival задачи
 	// (resetTimeoutRevival) и в StopTask. Сам автодистилл — в distill_auto.go.
 	distillDone sync.Map // taskID -> bool
+
+	// revivedAt: момент последнего revival терминальной задачи, unix-секунды.
+	// Служит вторым якорем сторожевого таймера застоя: после явного revival
+	// история («последняя находка давно») не должна хоронить задачу немедленно.
+	revivedAt sync.Map // taskID -> int64
 }
 
 type taskRuntime struct {
@@ -325,6 +330,7 @@ func (e *Engine) StopTask(taskID string) {
 	e.inflight.Delete(taskID)
 	e.coordStarted.Delete(taskID)
 	e.distillDone.Delete(taskID)
+	e.revivedAt.Delete(taskID)
 	e.deleteMu.Lock()
 	e.deleting.Delete(taskID)
 	e.deleteMu.Unlock()

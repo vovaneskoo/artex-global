@@ -216,3 +216,35 @@ func TestBootstrapAdmissionClearsQueuedPauseBarrier(t *testing.T) {
 		t.Fatal("bootstrap admission left the queued task behind the pause barrier")
 	}
 }
+
+func TestStagnationAnchorPrefersRevival(t *testing.T) {
+	old := time.Now().Add(-5 * time.Hour)
+	if got := stagnationAnchor(old, 0); !got.Equal(old) {
+		t.Fatalf("no revival: got %v, want %v", got, old)
+	}
+	rev := time.Now().Add(-time.Minute).Unix()
+	if got := stagnationAnchor(old, rev); got.Unix() != rev {
+		t.Fatalf("revival newer than finding must win, got %v", got)
+	}
+	now := time.Now()
+	if got := stagnationAnchor(now, old.Unix()); !got.Equal(now) {
+		t.Fatalf("older revival must not rewind anchor, got %v", got)
+	}
+}
+
+func TestResetTimeoutRevivalStampsRevivedAt(t *testing.T) {
+	e := NewEngine(nil)
+	e.settling.Store("t1", true)
+	e.deadline.Store("t1", int64(1))
+	e.resetTimeoutRevival("t1")
+	if e.isSettling("t1") {
+		t.Fatal("settling not cleared")
+	}
+	if _, ok := e.deadline.Load("t1"); ok {
+		t.Fatal("deadline cache not cleared")
+	}
+	v, ok := e.revivedAt.Load("t1")
+	if !ok || v.(int64) <= 0 {
+		t.Fatalf("revivedAt not stamped: %v %v", v, ok)
+	}
+}
