@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
@@ -1227,8 +1228,20 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		state = "exhausted"
 		log.Printf("[worker %s] intent %d 运行超时(exhausted)，收尾后写回 %s", name, intent.ID, wrote)
 	}
-	if state == "blocked" && isTaskLLMChainExhausted(err) {
-		_ = t.Store.SetIntentBlockedReason(intent.ID, db.IntentBlockedLLMQuota)
+	if state == "blocked" {
+		// Every blocked intent carries a reason: the LLM-quota case uses the
+		// canonical marker (resume auto-reopens exactly that reason); any other
+		// error gets its trimmed text so the graph never shows a reasonless block.
+		reason := db.IntentBlockedLLMQuota
+		if !isTaskLLMChainExhausted(err) {
+			if err == nil {
+				err = errors.New("worker run ended without result")
+			}
+			reason = trimBlockedReason(err)
+		}
+		if reasonErr := t.Store.SetIntentBlockedReason(intent.ID, reason); reasonErr != nil {
+			log.Printf("[worker %s] task %s 意图 #%d blocked 原因落库失败: %v", name, t.ID, intent.ID, reasonErr)
+		}
 	} else {
 		if stateErr := transitionIntentState(t.Store, intent.ID, "running", state); stateErr != nil {
 			log.Printf("[worker %s] task %s 意图 #%d 终态 %s 落库失败: %v", name, t.ID, intent.ID, state, stateErr)
@@ -1328,4 +1341,20 @@ func (e *Engine) claimNext(t *Task, name string) *db.Node {
 		}
 	}
 	return nil
+}
+
+// trimBlockedReason reduces an arbitrary worker error to a bounded, single-line
+// blocked_reason: strip newlines, cap the length (UTF-8 safe).
+func trimBlockedReason(err error) string {
+	const max = 300
+	r := strings.NewReplacer("\n", " ", "\r", " ", "\t", " ").Replace(err.Error())
+	r = strings.TrimSpace(r)
+	if len(r) <= max {
+		return r
+	}
+	cut := max
+	for cut > 0 && !utf8.ValidString(r[:cut]) {
+		cut--
+	}
+	return r[:cut] + "…"
 }

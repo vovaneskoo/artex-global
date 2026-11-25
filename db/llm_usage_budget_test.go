@@ -85,3 +85,40 @@ func TestLatestProgressUnixNotBelowFindings(t *testing.T) {
 		t.Fatalf("progress %d < findings %d", p, f)
 	}
 }
+
+// TestErrorRateWindowCountsStatuses guards the LLM-dead detector's meter: the
+// trailing-window query must split the ledger by status ('error' vs the rest)
+// so a dead-provider pattern (N errors, 0 OK) is recognizable.
+func TestErrorRateWindowCountsStatuses(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) - skipping", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	if err := d.EnsureLLMUsageTable(); err != nil {
+		t.Fatal(err)
+	}
+	suffix := time.Now().UnixNano()
+	task := fmt.Sprintf("llmdead-%d", suffix)
+	t.Cleanup(func() { _, _ = d.Exec(`DELETE FROM llm_usage WHERE task_id=$1`, task) })
+	for _, st := range []string{"error", "error", "error", "ok"} {
+		if err := d.InsertLLMUsage(&LLMUsage{TaskID: task, Worker: "worker", Model: "m", Status: st}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	failed, ok, err := d.ErrorRateWindow(task, 10*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed != 3 || ok != 1 {
+		t.Fatalf("failed=%d ok=%d, want 3/1", failed, ok)
+	}
+	// A window that predates every row sees nothing.
+	failed, ok, err = d.ErrorRateWindow(task, time.Nanosecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed != 0 || ok != 0 {
+		t.Fatalf("stale window: failed=%d ok=%d, want 0/0", failed, ok)
+	}
+}

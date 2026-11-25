@@ -49,6 +49,25 @@ type Pool struct {
 	members []*Member // in chain order (active first, then priority DESC)
 	health  *Registry
 	rr      atomic.Uint64 // rotates the starting point within an equal-priority group
+	// onTrip, when set, is invoked for every health Trip (circuit opened) with the
+	// member and the failure. The server uses it to raise the P0 provider alert
+	// (401 revoked key / 402 credit exhausted) outside the failover log noise.
+	onTrip func(m *Member, err error)
+}
+
+// SetOnTrip registers the health-trip callback (nil disables). Called once at
+// pool construction, before any request flows — no locking needed.
+func (p *Pool) SetOnTrip(fn func(m *Member, err error)) { p.onTrip = fn }
+
+// alertableStatus reports whether err carries an HTTP status worth a P0 alert:
+// 401 (key revoked/wrong) or 402 (credit/balance exhausted). Both are terminal
+// for the profile until a human intervenes, unlike 429/5xx which recover.
+func AlertableStatus(err error) int {
+	switch statusOf(err) {
+	case 401, 402:
+		return statusOf(err)
+	}
+	return 0
 }
 
 // New builds a Pool over members (already in chain order). Returns nil when the
@@ -107,6 +126,9 @@ func (p *Pool) Stream(ctx context.Context, req llm.CompletionRequest) iter.Seq2[
 			hard := isHardFailure(failed)
 			if p.health.Trip(m.ID, trimErr(failed), hard) {
 				log.Printf("[llmpool] 配置 %q(%s) 已熔断：%s", m.Name, m.Model, trimErr(failed))
+				if p.onTrip != nil {
+					p.onTrip(m, failed)
+				}
 			}
 			if i+1 < len(order) {
 				n := order[i+1]
@@ -146,6 +168,9 @@ func (p *Pool) Complete(ctx context.Context, req llm.CompletionRequest) (llm.Mes
 		hard := isHardFailure(err)
 		if p.health.Trip(m.ID, trimErr(err), hard) {
 			log.Printf("[llmpool] 配置 %q(%s) 已熔断：%s", m.Name, m.Model, trimErr(err))
+			if p.onTrip != nil {
+				p.onTrip(m, err)
+			}
 		}
 		if i+1 < len(order) {
 			n := order[i+1]

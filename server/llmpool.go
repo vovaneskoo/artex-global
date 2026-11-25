@@ -2,6 +2,7 @@ package server
 
 import (
 	"log"
+	"strings"
 	"time"
 
 	"github.com/Autumn-27/artex/agent"
@@ -122,7 +123,23 @@ func (s *Server) poolChain(headID int64, headProv llm.Provider, headCfg agent.Co
 	if len(members) < 2 {
 		return nil // nothing to fail over to
 	}
-	return llmpool.New(members, s.llmHealth)
+	pool := llmpool.New(members, s.llmHealth)
+	pool.SetOnTrip(s.llmTripAlert)
+	return pool
+}
+
+// llmTripAlert raises the P0 provider alert: a chain member tripped its breaker
+// with a terminal 401 (revoked key) or 402 (credit exhausted). Test/scratch
+// profiles (name containing "test") are noise by design and stay silent — they
+// are the intended disposable fallbacks, not the billing path. One log line per
+// trip; the task-level reaction lives in the engine's llm-dead detector.
+func (s *Server) llmTripAlert(m *llmpool.Member, err error) {
+	code := llmpool.AlertableStatus(err)
+	if code == 0 || strings.Contains(strings.ToLower(m.Name), "test") {
+		return
+	}
+	log.Printf("[llm-alert] P0: 配置 %q(%s) 不可用 HTTP %d：%v — 检查余额/密钥，任务将进入 LLM-dead 收尾",
+		m.Name, m.Model, code, err)
 }
 
 // poolForActive wraps the globally-active provider in the failover chain. Returns

@@ -179,6 +179,9 @@ func (e *Engine) deadlineCoordinator(ctx context.Context, t *Task) {
 			if e.budgetSettle(ctx, t) {
 				return
 			}
+			if e.llmDeadSettle(ctx, t) {
+				return
+			}
 		}
 		dl := e.taskDeadline(t)
 		if dl <= 0 {
@@ -270,6 +273,46 @@ func stagnationAnchor(since time.Time, revivedUnix int64) time.Time {
 		}
 	}
 	return since
+}
+
+// llmDeadSettle winds a task down EARLY when the whole LLM provider chain is
+// dead: within the configured window every metered call failed (status='error'
+// in the always-on llm_usage ledger) and none succeeded. This is the night-of
+// 2026-11-24 failure mode — credit exhausted at 23:33, workers idled three hours
+// on zero-token error calls until the stagnation window ran out. The detector
+// reacts in minutes instead. Settings: llm_dead_window_minutes (0=off, default
+// 10), llm_dead_min_failures (default 5). Same settle sequence as the deadline
+// path; the abort cause labels the runs as llm_dead.
+func (e *Engine) llmDeadSettle(ctx context.Context, t *Task) bool {
+	if e.IsPaused(t.ID) || e.isSettling(t.ID) || e.IsDeleting(t.ID) {
+		return false
+	}
+	window, minFails := e.m.LLMDeadConfig()
+	if window <= 0 {
+		return false
+	}
+	failed, ok, err := e.m.pg.ErrorRateWindow(t.ID, window)
+	if err != nil {
+		log.Printf("[llm-dead] task %s error-rate query failed: %v", t.ID, err)
+		return false
+	}
+	if failed < minFails || ok > 0 {
+		return false
+	}
+	log.Printf("[llm-dead] task %s LLM 链路疑似全灭：窗口 %s 内 %d 次调用全部失败、0 成功，进入收尾时序",
+		t.ID, window, failed)
+	alert := db.Activity{
+		Worker:  "engine",
+		Kind:    "alert",
+		Tool:    "llm_pool",
+		IsError: true,
+		Summary: fmt.Sprintf("LLM provider chain dead: %d consecutive failed calls, 0 OK in %s — early wind-down (llm_dead)", failed, window),
+	}
+	if _, aerr := t.Store.AppendActivity(alert); aerr == nil {
+		e.bc.Publish(t.ID, alert)
+	}
+	e.settleTask(ctx, t, agent.AbortLLMDead)
+	return true
 }
 
 // budgetSettle winds a task down when its lifetime LLM token spend reaches the
