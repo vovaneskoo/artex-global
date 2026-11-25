@@ -2980,6 +2980,8 @@
     },
     "toast": {
       "uploadFailed": "上传失败：{msg}",
+      "llmStall": "LLM 供应商调用连续失败",
+      "llmDead": "LLM 供应商链路失效 — 任务提前收尾",
       "createSessionFailed": "新建会话失败：{msg}",
       "reasonRequired": "请填写删除原因",
       "workerPaused": "Worker #{id} 已暂停",

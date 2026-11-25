@@ -630,6 +630,8 @@ export type ActivityKind =
   | "usage" // live cumulative token usage (per model turn); not rendered
   | "llm_switch" // automatic/manual task-level LLM switch
   | "llm_failover" // task-level provider switch / chain exhaustion audit event
+  | "llm_stall" // early warning: recent LLM calls all failing, none OK (supply dying)
+  | "llm_dead" // whole LLM supply dead in window — task wound down early (llm_dead)
   | "intercept_request"; // user-approval request from the intercept layer
 
 // ChatAttachment 是一次上传的文件:path 相对该会话/任务工作目录(即 agent 的 CWD)。

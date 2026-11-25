@@ -2980,6 +2980,8 @@
     },
     "toast": {
       "uploadFailed": "Upload failed: {msg}",
+      "llmStall": "LLM provider is failing",
+      "llmDead": "LLM provider chain dead — task winding down",
       "createSessionFailed": "Failed to create session: {msg}",
       "reasonRequired": "Please enter a deletion reason",
       "workerPaused": "Worker #{id} paused",

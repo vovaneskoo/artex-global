@@ -2980,6 +2980,8 @@
     },
     "toast": {
       "uploadFailed": "Error al subir: {msg}",
+      "llmStall": "El proveedor LLM está fallando",
+      "llmDead": "Cadena LLM caída: la tarea se detiene",
       "createSessionFailed": "Error al crear la sesión: {msg}",
       "reasonRequired": "Introduzca un motivo de eliminación",
       "workerPaused": "Worker #{id} en pausa",

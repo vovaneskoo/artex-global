@@ -2980,6 +2980,8 @@
     },
     "toast": {
       "uploadFailed": "アップロードに失敗しました: {msg}",
+      "llmStall": "LLMプロバイダーの呼び出しが連続失敗中",
+      "llmDead": "LLMチェーン全体が障害 — タスクを早期終了",
       "createSessionFailed": "新しいセッションの作成に失敗しました: {msg}",
       "reasonRequired": "削除理由を入力してください",
       "workerPaused": "Worker #{id} を一時停止しました",

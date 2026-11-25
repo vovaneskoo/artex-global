@@ -145,7 +145,14 @@ function emptyState(): SessionState {
 // sessionKeyOf routes an activity to its stable session key. worker="planner" covers
 // BOTH the Goal Agent's round-0 decomposition and the Planner (single Plan session).
 function sessionKeyOf(a: Activity): string {
-  if (a.worker === "system" || a.kind === "llm_switch" || a.kind === "llm_failover") return "system";
+  if (
+    a.worker === "system" ||
+    a.kind === "llm_switch" ||
+    a.kind === "llm_failover" ||
+    a.kind === "llm_stall" ||
+    a.kind === "llm_dead"
+  )
+    return "system";
   if (a.worker === "mainagent") return `main:${a.main_seg ?? 0}`; // one key per conversation segment
   if (a.worker === "planner") return "plan";
   if (a.intent_id) return `intent:${a.intent_id}`;
@@ -702,7 +709,12 @@ export function SessionsTab({ taskId }: { taskId: string }) {
             systemItems = mergeBySeq(
               systemItems,
               page.items.filter(
-                (item) => item.worker === "system" || item.kind === "llm_switch" || item.kind === "llm_failover",
+                (item) =>
+                  item.worker === "system" ||
+                  item.kind === "llm_switch" ||
+                  item.kind === "llm_failover" ||
+                  item.kind === "llm_stall" ||
+                  item.kind === "llm_dead",
               ),
             );
             if (page.items.length < SYSTEM_SCAN_PAGE || page.cursor <= since) break;
@@ -1004,7 +1016,16 @@ export function SessionsTab({ taskId }: { taskId: string }) {
           } catch {
             return; // ignore malformed frame
           }
-          if ((a.kind === "llm_switch" || a.kind === "llm_failover") && !llmToastSeqRef.current.has(a.seq)) {
+          if ((a.kind === "llm_stall" || a.kind === "llm_dead") && !llmToastSeqRef.current.has(a.seq)) {
+            // Supply-side health events (engine llm-dead detector): warn while the
+            // task is still refillable, error when the wind-down has begun. The
+            // server summary (counts + window) rides along as the description.
+            llmToastSeqRef.current.add(a.seq);
+            toast.error(a.kind === "llm_dead" ? t("toast.llmDead") : t("toast.llmStall"), {
+              id: `task-${taskId}-llm-${a.seq}`,
+              description: a.summary,
+            });
+          } else if ((a.kind === "llm_switch" || a.kind === "llm_failover") && !llmToastSeqRef.current.has(a.seq)) {
             llmToastSeqRef.current.add(a.seq);
             const transition = a.metadata?.llm_transition;
             if (transition?.mode === "exhausted" || a.is_error) {

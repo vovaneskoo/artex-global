@@ -2980,6 +2980,8 @@
     },
     "toast": {
       "uploadFailed": "업로드 실패: {msg}",
+      "llmStall": "LLM 공급자 호출이 연속 실패 중",
+      "llmDead": "LLM 체인 전체 장애 — 작업 조기 종료",
       "createSessionFailed": "새 세션 생성 실패: {msg}",
       "reasonRequired": "삭제 사유를 입력해 주세요",
       "workerPaused": "Worker #{id} 일시정지됨",
