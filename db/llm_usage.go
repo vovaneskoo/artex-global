@@ -107,32 +107,6 @@ ORDER BY SUM(input_tokens) + SUM(output_tokens) DESC, model`, taskID)
 	return out, rows.Err()
 }
 
-// LLMUsageWindow summarizes a task's recent LLM calls for the llm-dead
-// detector: how many calls were attempted inside the window, and how many of
-// them prove the LLM supply is alive. A row counts as alive when it is not an
-// error row, or when it carried output tokens — a call cancelled mid-stream can
-// be status='error' with tokens > 0, and that still proves the provider served
-// the request.
-type LLMUsageWindow struct {
-	Calls int
-	Alive int
-}
-
-// TaskLLMUsageWindow aggregates a task's llm_usage rows newer than window.
-// Path-agnostic by design: pool rotation, task-chain failover, agent bindings
-// and the global provider are all metered into the same ledger, so the
-// detector needs no knowledge of which profile serves the task right now.
-func (d *DB) TaskLLMUsageWindow(taskID string, window time.Duration) (LLMUsageWindow, error) {
-	var w LLMUsageWindow
-	err := d.QueryRow(`
-SELECT COUNT(*),
-       COUNT(*) FILTER (WHERE status IS DISTINCT FROM 'error' OR output_tokens > 0)
-FROM llm_usage
-WHERE COALESCE(task_id,'') = $1 AND ts >= now() - ($2 * interval '1 second')`,
-		taskID, int(window.Seconds())).Scan(&w.Calls, &w.Alive)
-	return w, err
-}
-
 // TaskTotalTokens returns a task's lifetime token spend from the always-on
 // llm_usage ledger (input + output + cache). Used by the token-budget police;
 // cache reads count because they are billed.

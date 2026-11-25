@@ -2,12 +2,14 @@ package server
 
 import "time"
 
-// LLM-dead detector settings, following manager_budget.go's pattern: plain
-// settings integers consumed by the engine coordinator, defaults sane, 0 window
-// disables the detector so upstream behavior is unchanged until opted in.
+// LLM-dead detector settings, following manager_stagnation.go's pattern: plain
+// settings integers consumed by the engine coordinator. Deliberately ON by
+// default (10-minute window): a dead provider chain burning worker loops for
+// hours is never the behavior anyone configured on purpose — the same posture
+// as the stagnation guard. "0" opts out.
 const (
 	// settingLLMDeadWindowMin is the trailing window in minutes over which failed
-	// LLM calls are counted. 0 / unset = detector off.
+	// LLM calls are counted. Unset/invalid = default 10; "0" = detector off.
 	settingLLMDeadWindowMin = "llm_dead_window_minutes"
 	// settingLLMDeadMinFails is how many failed calls within the window (with zero
 	// successful ones) count as "the whole LLM chain is dead". 0 = default 5.

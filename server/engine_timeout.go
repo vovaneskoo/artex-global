@@ -96,6 +96,7 @@ func (e *Engine) resetTimeoutRevival(taskID string) {
 	e.coordStarted.Delete(taskID)
 	e.distillDone.Delete(taskID) // 复活后的下一次终局仍可蒸馏一次
 	e.revivedAt.Store(taskID, time.Now().Unix())
+	e.llmStallWarned.Delete(taskID) // 复活后的下一个 LLM 失效 episode 重新预警
 }
 
 // stampFirstRun records first_run_at + deadline_at on the FIRST real run (LLM ready)
@@ -275,14 +276,28 @@ func stagnationAnchor(since time.Time, revivedUnix int64) time.Time {
 	return since
 }
 
+// minLLMStallCalls is the softer bar for the one-shot llm_stall warning: any
+// two failing calls with zero successes inside the window already deserve an
+// operator heads-up (activity event) while the task is still alive and the
+// supply still refillable. Below the settle threshold, so a healthy task with
+// a single transient failure never sees it.
+const minLLMStallCalls = 2
+
 // llmDeadSettle winds a task down EARLY when the whole LLM provider chain is
 // dead: within the configured window every metered call failed (status='error'
 // in the always-on llm_usage ledger) and none succeeded. This is the night-of
 // 2026-11-24 failure mode — credit exhausted at 23:33, workers idled three hours
 // on zero-token error calls until the stagnation window ran out. The detector
-// reacts in minutes instead. Settings: llm_dead_window_minutes (0=off, default
-// 10), llm_dead_min_failures (default 5). Same settle sequence as the deadline
-// path; the abort cause labels the runs as llm_dead.
+// reacts in minutes instead. Settings: llm_dead_window_minutes (unset = default
+// 10, "0" = off), llm_dead_min_failures (default 5). Same settle sequence as the
+// deadline path; the abort cause labels the runs as llm_dead.
+//
+// Before the settle threshold a one-shot llm_stall warning activity fires
+// (guarded by llmStallWarned, re-armed by the first successful call): the
+// ERRORS_AUDIT "first 402/401 → activity" ask, task-scoped, because the pool's
+// trip alert has no task context to attach to. Guards mirror stagnationSettle:
+// goalless (chat-injected) tasks are frontier-drain owned, paused/settling/
+// deleting/terminal tasks are not judged this round.
 func (e *Engine) llmDeadSettle(ctx context.Context, t *Task) bool {
 	if e.IsPaused(t.ID) || e.isSettling(t.ID) || e.IsDeleting(t.ID) {
 		return false
@@ -291,26 +306,33 @@ func (e *Engine) llmDeadSettle(ctx context.Context, t *Task) bool {
 	if window <= 0 {
 		return false
 	}
+	if has, err := t.Store.HasAnyGoal(); err != nil || !has {
+		return false
+	}
 	failed, ok, err := e.m.pg.ErrorRateWindow(t.ID, window)
 	if err != nil {
 		log.Printf("[llm-dead] task %s error-rate query failed: %v", t.ID, err)
 		return false
 	}
-	if failed < minFails || ok > 0 {
+	if ok > 0 {
+		e.llmStallWarned.Delete(t.ID) // supply recovered — re-arm the warning
+		return false
+	}
+	if failed >= minLLMStallCalls {
+		if _, warned := e.llmStallWarned.LoadOrStore(t.ID, true); !warned {
+			log.Printf("[llm-dead] task %s: %d failed LLM calls, 0 OK in %s — stall warning",
+				t.ID, failed, window)
+			e.emitActivity(t, db.Activity{Worker: "system", Kind: "llm_stall", IsError: true,
+				Summary: fmt.Sprintf("LLM calls failing: %d failed, 0 OK in %s — check provider balance/keys (llm_stall)", failed, window)})
+		}
+	}
+	if failed < minFails {
 		return false
 	}
 	log.Printf("[llm-dead] task %s LLM 链路疑似全灭：窗口 %s 内 %d 次调用全部失败、0 成功，进入收尾时序",
 		t.ID, window, failed)
-	alert := db.Activity{
-		Worker:  "engine",
-		Kind:    "alert",
-		Tool:    "llm_pool",
-		IsError: true,
-		Summary: fmt.Sprintf("LLM provider chain dead: %d consecutive failed calls, 0 OK in %s — early wind-down (llm_dead)", failed, window),
-	}
-	if _, aerr := t.Store.AppendActivity(alert); aerr == nil {
-		e.bc.Publish(t.ID, alert)
-	}
+	e.emitActivity(t, db.Activity{Worker: "system", Kind: "llm_dead", IsError: true,
+		Summary: fmt.Sprintf("LLM provider chain dead: %d failed calls, 0 OK in %s — early wind-down (llm_dead)", failed, window)})
 	e.settleTask(ctx, t, agent.AbortLLMDead)
 	return true
 }

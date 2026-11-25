@@ -195,6 +195,12 @@ type Engine struct {
 	// Служит вторым якорем сторожевого таймера застоя: после явного revival
 	// история («последняя находка давно») не должна хоронить задачу немедленно.
 	revivedAt sync.Map // taskID -> int64
+
+	// llmStallWarned: задача уже получила предупреждение llm_stall в текущем
+	// эпизоде отказа LLM (детектор llmDeadSettle). Сбрасывается первым же
+	// успешным вызовом, revival'ом и остановкой задачи — следующий эпизод
+	// снова предупреждает.
+	llmStallWarned sync.Map // taskID -> bool
 }
 
 type taskRuntime struct {
@@ -332,6 +338,7 @@ func (e *Engine) StopTask(taskID string) {
 	e.coordStarted.Delete(taskID)
 	e.distillDone.Delete(taskID)
 	e.revivedAt.Delete(taskID)
+	e.llmStallWarned.Delete(taskID)
 	e.deleteMu.Lock()
 	e.deleting.Delete(taskID)
 	e.deleteMu.Unlock()
