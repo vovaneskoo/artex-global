@@ -50,9 +50,10 @@ CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" GOFLAGS=-buildvcs=false \
 CTX="$(mktemp -d "${TMPDIR:-/tmp}/artex-img.XXXXXX")"
 trap 'rm -rf "$CTX"' EXIT
 cp "$DOCKERFILE" start.sh "$CTX/"
-mkdir -p "$CTX/dist/$ARCH" "$CTX/skills" "$CTX/scripts"
+mkdir -p "$CTX/dist/$ARCH" "$CTX/skills" "$CTX/scripts" "$CTX/exploits"
 cp "dist/$ARCH/artex" "$CTX/dist/$ARCH/artex"
 rsync -a skills/ "$CTX/skills/"
+rsync -a exploits/ "$CTX/exploits/"
 cp scripts/tool-versions.sh "$CTX/scripts/"
 mkdir -p "$CTX/scripts/osint"
 cp scripts/osint/recon.sh "$CTX/scripts/osint/"

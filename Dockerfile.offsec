@@ -107,6 +107,7 @@ COPY scripts/tool-versions.sh /opt/tool-versions.sh
 COPY scripts/osint/recon.sh /opt/recon.sh
 RUN chmod +x /app/artex /app/start.sh /opt/tool-versions.sh /opt/recon.sh
 COPY skills/ /app/skills/
+COPY exploits/ /opt/artex/exploits/
 
 RUN useradd -m -s /bin/bash artex \
     && mkdir -p /work /loot /app/data \

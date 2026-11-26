@@ -38,6 +38,7 @@ COPY dist/${TARGETARCH}/artex /app/artex
 COPY start.sh /app/start.sh
 RUN chmod +x /app/artex /app/start.sh
 COPY skills/ /app/skills/
+COPY exploits/ /opt/artex/exploits/
 # data/(SQLite + jwt.key) 영속화 지점
 VOLUME ["/app/data"]
 EXPOSE 8787 8788
