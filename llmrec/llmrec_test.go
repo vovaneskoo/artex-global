@@ -1,6 +1,7 @@
 package llmrec
 
 import (
+	"errors"
 	"context"
 	"iter"
 	"os"
@@ -128,5 +129,73 @@ FROM llm_usage WHERE profile_name=$1`, profile).Scan(&count, &input, &output, &w
 		if count != 1 || input != 23 || output != 5 || worker != "btw" || status != wantStatus {
 			t.Fatalf("early=%v: count=%d usage=%d/%d worker=%q status=%q", early, count, input, output, worker, status)
 		}
+	}
+}
+
+func TestClassifyError(t *testing.T) {
+	cases := []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{nil, 0, ""},
+		{errors.New("openai: status 402: Insufficient balance"), 402, "http_402"},
+		{errors.New("openai: status 401: invalid api key"), 401, "http_401"},
+		{errors.New("stream empty before message_start"), 0, "empty_stream"},
+		{errors.New("dial tcp 127.0.0.1:9: connect: connection refused"), 0, "unreachable"},
+		{errors.New("net/http: request canceled"), 0, "other"},
+		{context.Canceled, 0, "canceled"},
+		{context.DeadlineExceeded, 0, "deadline"},
+		{errors.New("tls handshake timeout"), 0, "timeout"},
+	}
+	for _, c := range cases {
+		status, code := classifyError(c.err)
+		if status != c.status || code != c.code {
+			t.Fatalf("classifyError(%v)=(%d,%q) want (%d,%q)", c.err, status, code, c.status, c.code)
+		}
+	}
+}
+
+type failingCompleteProvider struct{ err error }
+
+func (p failingCompleteProvider) Stream(context.Context, llm.CompletionRequest) iter.Seq2[llm.StreamEvent, error] {
+	return func(yield func(llm.StreamEvent, error) bool) { yield(llm.StreamEvent{}, p.err) }
+}
+
+func (p failingCompleteProvider) Complete(context.Context, llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
+	return llm.Message{}, "", llm.Usage{}, p.err
+}
+
+func TestFailedCallRecordsHTTPFingerprint(t *testing.T) {
+	dsn := os.Getenv("ARTEX_PG_DSN")
+	if dsn == "" {
+		t.Skip("requires isolated ARTEX_PG_DSN")
+	}
+	pg, err := db.Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.Close()
+	if err := pg.EnsureLLMUsageTable(); err != nil {
+		t.Fatal(err)
+	}
+	profile := "btw-fail-" + uuid.NewString()
+	recorder := Wrap(failingCompleteProvider{err: errors.New("relay: status 402: quota exceeded")},
+		pg, "fixture", profile, "", "", func() bool { return false })
+	_, _, _, callErr := recorder.Complete(context.Background(), llm.CompletionRequest{})
+	if callErr == nil {
+		t.Fatal("expected provider error")
+	}
+	var status string
+	var httpStatus int
+	var code *string
+	err = pg.QueryRow(`SELECT status, http_status, error_code FROM llm_usage WHERE profile_name=$1`, profile).
+		Scan(&status, &httpStatus, &code)
+	_, _ = pg.Exec(`DELETE FROM llm_usage WHERE profile_name=$1`, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "error" || httpStatus != 402 || code == nil || *code != "http_402" {
+		t.Fatalf("row status=%q http=%d code=%v, want error/402/http_402", status, httpStatus, code)
 	}
 }

@@ -24,6 +24,13 @@ type LLMUsage struct {
 	CacheRead     int    `json:"cache_read"`
 	CacheWrite    int    `json:"cache_write"`
 	Status        string `json:"status"` // ok | error
+	// HTTPStatus is the provider's HTTP status when the failure carried one
+	// (401/402/429/5xx), else 0. ErrorCode is a bounded classification
+	// (http_401, canceled, timeout, empty_stream, other...). Together they let
+	// the ledger tell a dead key / burned quota apart from a cheap call —
+	// both otherwise look like a zero-token row.
+	HTTPStatus int    `json:"http_status"`
+	ErrorCode  string `json:"error_code"`
 }
 
 const llmUsageSchema = `
@@ -40,7 +47,9 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     output_tokens  INTEGER NOT NULL DEFAULT 0,
     cache_read     INTEGER NOT NULL DEFAULT 0,
     cache_write    INTEGER NOT NULL DEFAULT 0,
-    status         TEXT
+    status         TEXT,
+    http_status    INTEGER NOT NULL DEFAULT 0,
+    error_code     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_llm_usage_task  ON llm_usage(task_id);
 CREATE INDEX IF NOT EXISTS idx_llm_usage_model ON llm_usage(task_id, model);
@@ -60,6 +69,13 @@ func (d *DB) EnsureLLMUsageTable() error {
 	if _, err := tx.Exec(llmUsageSchema); err != nil {
 		return err
 	}
+	// The table predates the failure-classification columns on existing
+	// deployments; CREATE IF NOT EXISTS never alters, so add them idempotently.
+	if _, err := tx.Exec(`ALTER TABLE llm_usage
+    ADD COLUMN IF NOT EXISTS http_status INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS error_code TEXT`); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -71,10 +87,10 @@ func (d *DB) InsertLLMUsage(u *LLMUsage) error {
 		expID = u.ExplorationID
 	}
 	_, err := d.Exec(`
-INSERT INTO llm_usage(task_id, exploration_id, worker, model, profile_name, latency_ms, input_tokens, output_tokens, cache_read, cache_write, status)
-VALUES (NULLIF($1,''),$2,NULLIF($3,''),NULLIF($4,''),NULLIF($5,''),$6,$7,$8,$9,$10,$11)`,
+INSERT INTO llm_usage(task_id, exploration_id, worker, model, profile_name, latency_ms, input_tokens, output_tokens, cache_read, cache_write, status, http_status, error_code)
+VALUES (NULLIF($1,''),$2,NULLIF($3,''),NULLIF($4,''),NULLIF($5,''),$6,$7,$8,$9,$10,$11,$12,NULLIF($13,''))`,
 		u.TaskID, expID, u.Worker, u.Model, u.ProfileName,
-		u.LatencyMs, u.InputTokens, u.OutputTokens, u.CacheRead, u.CacheWrite, u.Status)
+		u.LatencyMs, u.InputTokens, u.OutputTokens, u.CacheRead, u.CacheWrite, u.Status, u.HTTPStatus, u.ErrorCode)
 	return err
 }
 

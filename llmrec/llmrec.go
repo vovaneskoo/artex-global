@@ -6,8 +6,11 @@ package llmrec
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"iter"
 	"log"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -167,7 +170,7 @@ func (r *Recorder) Stream(ctx context.Context, req llm.CompletionRequest) iter.S
 				status = "error"
 			}
 			// Lightweight metering row — always written.
-			r.recordUsage(taskID, expID, worker, usage, int(time.Since(start).Milliseconds()), status)
+			r.recordUsage(taskID, expID, worker, usage, int(time.Since(start).Milliseconds()), status, err)
 			// Heavy trace row — only when body recording is on.
 			if recordBodies {
 				r.record(req, session, taskID, worker, reqBody, capt, start, textBuf.String(), thinkingBuf.String(), usage, stopReason, err)
@@ -245,7 +248,7 @@ func (r *Recorder) Complete(ctx context.Context, req llm.CompletionRequest) (llm
 	if err != nil {
 		status = "error"
 	}
-	r.recordUsage(taskID, expID, worker, usage, int(time.Since(start).Milliseconds()), status)
+	r.recordUsage(taskID, expID, worker, usage, int(time.Since(start).Milliseconds()), status, err)
 	if recordBodies {
 		r.record(req, session, taskID, worker, reqBody, capt, start, msg.Text(), thinkingText(msg), usage, stopReason, err)
 	}
@@ -262,9 +265,46 @@ func thinkingText(msg llm.Message) string {
 	return b.String()
 }
 
+// httpStatusRe mirrors the provider error shape "...: status 401: body"
+// (norma/llm/retry.go). The message is the only carrier — the SDK has no typed
+// status error.
+var httpStatusRe = regexp.MustCompile(`status (\d{3})\b`)
+
+// classifyError derives the ledger's failure fingerprint (http_status,
+// error_code) from a provider error. It exists so "provider is dead / quota
+// burned" (401/402/429) is distinguishable from a cheap zero-token call and
+// from local cancellation — night of 2026-11-24 both looked identical.
+// Bounded values only: the raw body never reaches the ledger.
+func classifyError(err error) (int, string) {
+	if err == nil {
+		return 0, ""
+	}
+	if m := httpStatusRe.FindStringSubmatch(err.Error()); m != nil {
+		if code, cerr := strconv.Atoi(m[1]); cerr == nil {
+			return code, "http_" + m[1]
+		}
+	}
+	switch {
+	case errors.Is(err, context.Canceled):
+		return 0, "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return 0, "deadline"
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "empty"):
+		return 0, "empty_stream"
+	case strings.Contains(msg, "timeout"), strings.Contains(msg, "timed out"):
+		return 0, "timeout"
+	case strings.Contains(msg, "connection refused"), strings.Contains(msg, "no such host"):
+		return 0, "unreachable"
+	}
+	return 0, "other"
+}
+
 // recordUsage appends one lightweight metering row to llm_usage (no bodies). Skips
 // zero-token calls with no model, which carry nothing worth metering.
-func (r *Recorder) recordUsage(taskID string, expID int64, worker string, usage llm.Usage, latencyMs int, status string) {
+func (r *Recorder) recordUsage(taskID string, expID int64, worker string, usage llm.Usage, latencyMs int, status string, callErr error) {
 	if r.pg == nil {
 		return
 	}
@@ -272,6 +312,7 @@ func (r *Recorder) recordUsage(taskID string, expID int64, worker string, usage 
 		usage.CacheReadTokens == 0 && usage.CacheWriteTokens == 0 {
 		return
 	}
+	httpStatus, errCode := classifyError(callErr)
 	err := r.pg.InsertLLMUsage(&db.LLMUsage{
 		TaskID:        taskID,
 		ExplorationID: expID,
@@ -284,6 +325,8 @@ func (r *Recorder) recordUsage(taskID string, expID int64, worker string, usage 
 		CacheRead:     usage.CacheReadTokens,
 		CacheWrite:    usage.CacheWriteTokens,
 		Status:        status,
+		HTTPStatus:    httpStatus,
+		ErrorCode:     errCode,
 	})
 	if err != nil {
 		log.Printf("[llmusage] insert: %v", err)
