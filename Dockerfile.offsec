@@ -111,7 +111,7 @@ COPY exploits/ /opt/artex/exploits/
 
 RUN useradd -m -s /bin/bash artex \
     && mkdir -p /work /loot /app/data \
-    && chown -R artex:artex /work /loot /app
+    && chown -R artex:artex /work /loot /app /opt/artex
 USER artex
 WORKDIR /work
 
