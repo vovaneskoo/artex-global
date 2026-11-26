@@ -24,6 +24,10 @@ func TestParseFingerprints(t *testing.T) {
 		{"Apache/2.4.49 (Unix)", []fingerprint{{"apache", "2.4.49"}}},
 		{"Microsoft-IIS/10.0", []fingerprint{{"microsoft iis", "10.0"}}},
 		{"Apache Tomcat 9.0.31", []fingerprint{{"apache tomcat", "9.0.31"}}},
+		// service banners
+		{"SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.4", []fingerprint{{"openssh", "8.9"}}},
+		{"MySQL 5.7.29-log", []fingerprint{{"mysql", "5.7.29"}}},
+		{"220 ProFTPD 1.3.5b Server (Debian)", []fingerprint{{"proftpd", "1.3.5"}}},
 		// noise must not fire
 		{"error 404 page not found", nil},
 		{"redirect to port 8080", nil},

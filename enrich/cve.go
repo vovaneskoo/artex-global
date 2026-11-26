@@ -81,12 +81,22 @@ var (
 	}
 )
 
+// reSSHProtoPrefix strips the protocol banner prefix ("SSH-2.0-OpenSSH_8.9p1"
+// → "OpenSSH_8.9p1") so the product token does not swallow the protocol version.
+var reSSHProtoPrefix = regexp.MustCompile(`(?i)\b(?:ssh|ftp|smtp|imap|pop3?)-\d+(?:\.\d+)?-`)
+
 // parseFingerprints extracts (product, version) pairs from whatweb/wappalyzer
-// style technology strings or raw HTTP headers. Deduped, capped.
+// style technology strings, raw HTTP headers, or service banners
+// ("SSH-2.0-OpenSSH_8.9p1", "MySQL 5.7.29-log", "220 ProFTPD 1.3.5b Server").
+// Deduped, capped.
 func parseFingerprints(in string) []fingerprint {
 	if strings.TrimSpace(in) == "" {
 		return nil
 	}
+	// banner normalisation: drop the protocol prefix, treat underscores as
+	// separators (OpenSSH_8.9p1 → "OpenSSH 8.9p1")
+	in = reSSHProtoPrefix.ReplaceAllString(in, " ")
+	in = strings.ReplaceAll(in, "_", " ")
 	var out []fingerprint
 	seen := map[string]bool{}
 	add := func(product, version string) {

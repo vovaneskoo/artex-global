@@ -110,12 +110,34 @@ type assetInputItem struct {
 	ServiceIP     string           `json:"service_ip"` // optional enrichment IP
 
 	// ---- service (other) ----
-	Port  int    `json:"port"`
-	Proto string `json:"proto"`
+	Banner string `json:"banner"` // raw service banner (nmap -sV), non-HTTP services
+	Port   int    `json:"port"`
+	Proto  string `json:"proto"`
 
 	// ---- endpoint ----
 	Method string           `json:"method"`
 	Params []map[string]any `json:"params"`
+}
+
+// versionedServiceFingerprint builds a fingerprint string for a non-HTTP
+// service from its name and banner, but only when one of them carries a
+// version digit — the engine drops versionless strings anyway, and an empty
+// enqueue saves a queue slot.
+func versionedServiceFingerprint(serviceName, banner string) string {
+	fp := strings.TrimSpace(serviceName)
+	if b := strings.TrimSpace(banner); b != "" {
+		if fp != "" {
+			fp += "; " + b
+		} else {
+			fp = b
+		}
+	}
+	for _, r := range fp {
+		if r >= '0' && r <= '9' {
+			return fp
+		}
+	}
+	return ""
 }
 
 // versionedTechnologies picks the technology entries that carry a version
@@ -205,7 +227,8 @@ func (t *ToolSet) insertAssets() actool.CoreTool {
 						"items":       map[string]any{"type": "object"},
 					},
 					// service (other，非 HTTP)
-					"service_name": str("服务名称，如 ssh/mysql/redis（service 非 HTTP 时必填）"),
+					"service_name": str("服务名称，如 ssh/mysql/redis（service 非 HTTP 时必填）；建议带版本，如 \"OpenSSH 9.6p1\""),
+					"banner":       str("服务原始 banner（nmap -sV 输出，可选，非 HTTP service）：如 \"SSH-2.0-OpenSSH_8.9p1\"。带版本时会自动触发 CVE 候选查找（extra.cve）"),
 					"port":         intp("端口号（service 非 HTTP 时必填）"),
 					// endpoint
 					"method": str("HTTP 方法：GET/POST/PUT/PATCH/DELETE 等（endpoint 必填）"),
@@ -392,9 +415,18 @@ func (t *ToolSet) insertAssets() actool.CoreTool {
 					case "service":
 						if item.URL != "" {
 							t.enrich.ProbeSite(id, item.URL)
-						}
-						if fp := versionedTechnologies(item.Technologies); fp != "" {
-							t.enrich.ResearchCVE(id, fp)
+							if fp := versionedTechnologies(item.Technologies); fp != "" {
+								t.enrich.ResearchCVE(id, fp)
+							}
+						} else {
+							// не-HTTP сервис: баннер → extra.service_banner,
+							// версия в имени/баннере → CVE-кандидаты
+							if item.Banner != "" {
+								_ = t.as.MergeExtra(id, map[string]any{"service_banner": item.Banner})
+							}
+							if fp := versionedServiceFingerprint(item.ServiceName, item.Banner); fp != "" {
+								t.enrich.ResearchCVE(id, fp)
+							}
 						}
 					}
 				}
