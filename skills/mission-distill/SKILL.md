@@ -56,7 +56,8 @@ belongs in exploit-chaining, and the addendum says exactly where.
 
 Write to the mission work dir, then queue:
 
-`work/distill/<date>-<skill>-<slug>.md`
+`work/distill/<date>-<skill>-<slug>.md` - **one file per lesson** (never one
+bundled `addenda.md`: nobody can accept lesson 2 and reject lesson 3 otherwise).
 
 ```
 ---
@@ -76,8 +77,11 @@ confidence: mission-proven|single-observation
 ```
 
 Then push the whole `work/distill/` into the platform distill queue for human
-review (`<data-dir>/distill/queue`); the queue, not the live skill, is the
-destination - a human merges. Mark `single-observation` on anything seen once so
+review (`<data-dir>/distill/queue`, `/opt/artex/data/distill/queue` on the host
+engine) and apply the matching `# Addendum N` block to the skill's addendum
+list; the queue, not the live skill, is the destination - a human merges. If
+no queue path is writable, leave the files in `work/distill/` and name the path
+in the report. Mark `single-observation` on anything seen once so
 the reviewer knows it is not yet a rule.
 
 ## d) Anti-patterns (checked before queueing)
