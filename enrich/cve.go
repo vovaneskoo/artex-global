@@ -605,20 +605,20 @@ func (c *cveEnricher) epssBatch(ids []string) map[string]float64 {
 // nginx-ui / Nginx Proxy Manager / nginx-ingress (different products whose
 // names merely contain "nginx").
 var cpeProducts = map[string][2]string{
-	"nginx":             {"nginx", "nginx"},
+	"nginx":             {"f5", "nginx"}, // NVD lists nginx under its owner F5
 	"apache":            {"apache", "http_server"},
 	"apache httpd":      {"apache", "http_server"},
 	"apache http server": {"apache", "http_server"},
-	"microsoft iis":     {"microsoft", "internet_information_server"},
-	"iis":               {"microsoft", "internet_information_server"},
-	"internet information services": {"microsoft", "internet_information_server"},
+	"microsoft iis":     {"microsoft", "internet_information_services"},
+	"iis":               {"microsoft", "internet_information_services"},
+	"internet information services": {"microsoft", "internet_information_services"},
 	"tomcat":            {"apache", "tomcat"},
 	"apache tomcat":     {"apache", "tomcat"},
 	"struts":            {"apache", "struts"},
 	"apache struts":     {"apache", "struts"},
 	"wordpress":         {"wordpress", "wordpress"},
 	"php":               {"php", "php"},
-	"mysql":             {"mysql", "mysql"},
+	"mysql":             {"oracle", "mysql"},
 	"mariadb":           {"mariadb", "mariadb"},
 	"postgresql":        {"postgresql", "postgresql"},
 	"redis":             {"redis", "redis"},

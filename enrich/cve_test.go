@@ -173,15 +173,19 @@ func TestResearchOnlineFeeds(t *testing.T) {
 	}))
 	defer epss.Close()
 	nvd := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if kw := r.URL.Query().Get("keywordSearch"); kw != "struts" {
+		if kw := r.URL.Query().Get("keywordSearch"); kw != "gitlab" {
 			w.Write([]byte(`{"vulnerabilities":[],"totalResults":0}`))
 			return
 		}
-		w.Write([]byte(`{"totalResults":2,"startIndex":0,"vulnerabilities":[
-			{"cve":{"id":"CVE-2017-5638","descriptions":[{"lang":"en","value":"Apache Struts 2.3.5 - 2.3.31 Jakarta Multipart RCE"}],"metrics":{"cvssMetricV31":[{"cvssData":{"baseSeverity":"CRITICAL"}}]},
-			  "configurations":[{"nodes":[{"cpeMatch":[{"vulnerable":true,"criteria":"cpe:2.3:a:apache:struts:*:*:*:*:*:*:*:*","versionStartIncluding":"2.3.5","versionEndExcluding":"2.3.32"}]}]}]}},
-			{"cve":{"id":"CVE-2018-11776","descriptions":[{"lang":"en","value":"Apache Struts 2.0.4 - 2.3.34 RCE"}],
-			  "configurations":[{"nodes":[{"cpeMatch":[{"vulnerable":true,"criteria":"cpe:2.3:a:apache:struts:*:*:*:*:*:*:*:*","versionStartIncluding":"2.0.4","versionEndExcluding":"2.3.30"}]}]}]}}
+		// criteria mirror the real NVD shape: vendor tokens (gitlab under gitlab),
+		// version bounds, and one lookalike product that must be rejected
+		w.Write([]byte(`{"totalResults":3,"startIndex":0,"vulnerabilities":[
+			{"cve":{"id":"CVE-2024-0402","descriptions":[{"lang":"en","value":"GitLab account takeover"}],"metrics":{"cvssMetricV31":[{"cvssData":{"baseSeverity":"CRITICAL"}}]},
+			  "configurations":[{"nodes":[{"cpeMatch":[{"vulnerable":true,"criteria":"cpe:2.3:a:gitlab:gitlab:*:*:*:*:*:*:*:*","versionStartIncluding":"16.5.0","versionEndExcluding":"16.8.1"}]}]}]}},
+			{"cve":{"id":"CVE-2020-99998","descriptions":[{"lang":"en","value":"older gitlab XSS"}],
+			  "configurations":[{"nodes":[{"cpeMatch":[{"vulnerable":true,"criteria":"cpe:2.3:a:gitlab:gitlab:*:*:*:*:*:*:*:*","versionEndExcluding":"13.1.0"}]}]}]}},
+			{"cve":{"id":"CVE-2020-99999","descriptions":[{"lang":"en","value":"gitlab-backup unrelated product RCE"}],
+			  "configurations":[{"nodes":[{"cpeMatch":[{"vulnerable":true,"criteria":"cpe:2.3:a:someone:gitlab_backup:*:*:*:*:*:*:*:*","versionStartIncluding":"1.0.0","versionEndExcluding":"9.9.9"}]}]}]}}
 		]}`))
 	}))
 	defer nvd.Close()
@@ -203,10 +207,11 @@ func TestResearchOnlineFeeds(t *testing.T) {
 	}
 
 	// no local hit → NVD product query + CPE range filter:
-	// 2.3.31 is inside CVE-2017-5638 (< 2.3.32) but outside CVE-2018-11776 (< 2.3.30)
-	got = c.research("Struts 2.3.31")
-	if len(got) != 1 || got[0].CVE != "CVE-2017-5638" || got[0].Source != "nvd" {
-		t.Fatalf("struts fallback: got %+v", got)
+	// 16.8.0 is inside CVE-2024-0402 (< 16.8.1), outside the 13.1.0-bound one,
+	// and the gitlab_backup lookalike must be rejected by product equality
+	got = c.research("Gitlab 16.8.0")
+	if len(got) != 1 || got[0].CVE != "CVE-2024-0402" || got[0].Source != "nvd" {
+		t.Fatalf("gitlab fallback: got %+v", got)
 	}
 	if got[0].Title == "" {
 		t.Errorf("nvd candidate must carry the advisory title")
