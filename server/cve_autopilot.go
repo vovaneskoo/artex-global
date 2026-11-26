@@ -14,12 +14,29 @@ import (
 // The worker loop picks it up on the next claim without any planner round.
 func (s *Server) cveAutopilotFor(t *Task) func(assetIDs []int64, findingNodeID int64, summary string) {
 	return func(assetIDs []int64, findingNodeID int64, summary string) {
-		if len(assetIDs) == 0 || t.Store == nil {
+		if len(assetIDs) == 0 || t.Store == nil || s.m == nil {
 			return
 		}
 		assets, err := s.m.Assets().GetByIDs(assetIDs)
 		if err != nil {
 			log.Printf("[autopilot] asset lookup failed: %v", err)
+			return
+		}
+		// The intent anchors on ASSET ids (exploration_anchors is node→asset);
+		// dedupe them and skip when an autopilot intent on these assets is
+		// still queued/running — its own report_finding would otherwise re-spawn.
+		uniq := make([]int64, 0, len(assets))
+		seen := map[int64]bool{}
+		for _, a := range assets {
+			if !seen[a.ID] {
+				seen[a.ID] = true
+				uniq = append(uniq, a.ID)
+			}
+		}
+		if active, err := t.Store.CountActiveAutopilotOnAssets(uniq); err != nil {
+			log.Printf("[autopilot] dedupe check failed: %v", err)
+		} else if active > 0 {
+			log.Printf("[autopilot] skip: %d active autopilot intent(s) already anchor these assets", active)
 			return
 		}
 		// Collect CVE candidates from the finding's assets (Extra["cve"]["candidates"]).
@@ -86,9 +103,9 @@ func (s *Server) cveAutopilotFor(t *Task) func(assetIDs []int64, findingNodeID i
 					"Report findings back with evidence.",
 				summary, list,
 			),
-			"asset_ids": assetIDs,
+			"asset_ids": uniq,
 		}
-		intentID, err := t.Store.AddIntent(payload, 7, []int64{findingNodeID}, "autopilot")
+		intentID, err := t.Store.AddIntent(payload, 7, uniq, "autopilot")
 		if err != nil {
 			log.Printf("[autopilot] intent spawn failed: %v", err)
 			return

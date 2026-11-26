@@ -833,6 +833,24 @@ WHERE exploration_id=$1 AND kind='intent' AND state='open'`, s.expID).Scan(&n)
 	return n, err
 }
 
+// CountActiveAutopilotOnAssets counts still-open/running autopilot intents that
+// anchor any of the given assets. The CVE autopilot uses it to avoid spawning a
+// duplicate exploit-assessment intent while one is already queued or running on
+// the same asset (the autopilot worker itself reports findings, so without this
+// guard the loop would keep spawning).
+func (s *ExplorationStore) CountActiveAutopilotOnAssets(assetIDs []int64) (int, error) {
+	if len(assetIDs) == 0 {
+		return 0, nil
+	}
+	var n int
+	err := s.db.QueryRow(`
+SELECT COUNT(DISTINCT n.id) FROM exploration_nodes n
+JOIN exploration_anchors a ON a.node_id = n.id
+WHERE n.exploration_id=$1 AND n.kind='intent' AND n.origin='autopilot'
+  AND n.state IN ('open','running') AND a.asset_id = ANY($2)`, s.expID, assetIDs).Scan(&n)
+	return n, err
+}
+
 // CountByKind counts this exploration's nodes of one kind (no summary filter).
 // The terminal distill summary (server/distill_auto.go) uses it for the fact
 // count without materializing node payloads.

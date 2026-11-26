@@ -300,3 +300,59 @@ func TestNodesPageQueryMatchesID(t *testing.T) {
 		t.Fatalf("non-existent id: total=%d nodes=%+v, want empty", total, nodes)
 	}
 }
+
+// TestCountActiveAutopilotOnAssets: only open/running autopilot intents that
+// anchor one of the queried assets count — that is what the CVE autopilot uses
+// to avoid re-spawning itself while an exploit-assessment intent is queued.
+func TestCountActiveAutopilotOnAssets(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) — skipping", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	aid, err := d.Assets().UpsertIP(UpsertIPReq{IP: "192.0.2.77"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Exec(`DELETE FROM assets WHERE id=$1`, aid)
+	other, err := d.Assets().UpsertIP(UpsertIPReq{IP: "192.0.2.78"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Exec(`DELETE FROM assets WHERE id=$1`, other)
+
+	expID, err := d.CreateExploration("test", "autopilot dedupe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Exec(`DELETE FROM explorations WHERE id=$1`, expID)
+	es := d.Exploration(expID)
+
+	if n, err := es.CountActiveAutopilotOnAssets([]int64{aid}); err != nil || n != 0 {
+		t.Fatalf("empty graph: n=%d err=%v", n, err)
+	}
+	id, err := es.AddIntent(map[string]any{"summary": "assess cve"}, 7, []int64{aid}, "autopilot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := es.CountActiveAutopilotOnAssets([]int64{aid}); n != 1 {
+		t.Fatalf("open autopilot intent not counted: %d", n)
+	}
+	if n, _ := es.CountActiveAutopilotOnAssets([]int64{other}); n != 0 {
+		t.Fatalf("unrelated asset counted: %d", n)
+	}
+	// planner intent on the same asset must not count as autopilot
+	if _, err := es.AddIntent(map[string]any{"summary": "other"}, 5, []int64{other}, "planner"); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := es.CountActiveAutopilotOnAssets([]int64{other}); n != 0 {
+		t.Fatalf("planner intent counted: %d", n)
+	}
+	if _, err := d.Exec(`UPDATE exploration_nodes SET state='done' WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := es.CountActiveAutopilotOnAssets([]int64{aid}); n != 0 {
+		t.Fatalf("done intent still counted: %d", n)
+	}
+}
