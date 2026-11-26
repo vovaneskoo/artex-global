@@ -159,6 +159,7 @@ type edbRow struct {
 	codes     []string // CVE ids referenced by the entry
 	updated   string
 	versions  []string // every dotted-decimal token in desc, exact-match set
+	ranges    [][2]string // affected ranges parsed from desc ("1.9.14 - 1.20.0", "before 1.20.1")
 }
 
 const edbRefresh = 12 * time.Hour
@@ -220,6 +221,7 @@ func (c *cveEnricher) loadEDB() []edbRow {
 			verified: get(rec, "verified") == "1",
 			updated:  get(rec, "date_updated"),
 			versions: versionTokens(desc),
+			ranges:   versionRanges(desc),
 		}
 		for _, code := range strings.FieldsFunc(get(rec, "codes"), func(r rune) bool { return r == ';' || r == ',' }) {
 			if code = strings.TrimSpace(code); strings.HasPrefix(strings.ToUpper(code), "CVE-") {
@@ -243,11 +245,82 @@ func versionTokens(lowerDesc string) []string {
 	return out
 }
 
-// containsVersion reports whether the exact version token appears in the row's
-// description tokens ("1.18" must NOT match "1.18.0" — exact token equality).
+// Affected-range syntaxes seen in exploit descriptions: "1.3.9 < 1.4.0",
+// "1.9.14 - 1.20.0", "x before 1.20.1", bare "< 1.21.0". Ranges are inclusive
+// at both ends — they generate hints, the applicability gate is downstream.
+var (
+	reVerPair   = regexp.MustCompile(`(\d+(?:\.\d+){1,3})\s*(?:<=?|–|—|\s-\s|to|through|bis)\s*(\d+(?:\.\d+){1,3})`)
+	reVerBefore = regexp.MustCompile(`(?:before|prior to|up to)\s+(\d+(?:\.\d+){1,3})`)
+	reVerLess   = regexp.MustCompile(`<=?\s*(\d+(?:\.\d+){1,3})`)
+)
+
+func versionRanges(lowerDesc string) [][2]string {
+	var out [][2]string
+	// pair spans first, so the open-start patterns can skip what they'd duplicate
+	var pairSpans [][2]int
+	for _, m := range reVerPair.FindAllStringSubmatchIndex(lowerDesc, -1) {
+		out = append(out, [2]string{lowerDesc[m[2]:m[3]], lowerDesc[m[4]:m[5]]})
+		pairSpans = append(pairSpans, [2]int{m[0], m[1]})
+	}
+	inPair := func(start int) bool {
+		for _, s := range pairSpans {
+			if start >= s[0] && start < s[1] {
+				return true
+			}
+		}
+		return false
+	}
+	for _, m := range reVerBefore.FindAllStringSubmatchIndex(lowerDesc, -1) {
+		if !inPair(m[0]) {
+			out = append(out, [2]string{"0", lowerDesc[m[2]:m[3]]})
+		}
+	}
+	for _, m := range reVerLess.FindAllStringSubmatchIndex(lowerDesc, -1) {
+		if !inPair(m[0]) {
+			out = append(out, [2]string{"0", lowerDesc[m[2]:m[3]]})
+		}
+	}
+	return out
+}
+
+// compareVersions is numeric component-wise ("1.4" < "1.14"), zero-padded
+// ("1.18" == "1.18.0").
+func compareVersions(a, b string) int {
+	as := strings.Split(a, ".")
+	bs := strings.Split(b, ".")
+	n := len(as)
+	if len(bs) > n {
+		n = len(bs)
+	}
+	for i := 0; i < n; i++ {
+		av, bv := 0, 0
+		if i < len(as) {
+			av, _ = strconv.Atoi(as[i])
+		}
+		if i < len(bs) {
+			bv, _ = strconv.Atoi(bs[i])
+		}
+		if av != bv {
+			if av < bv {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
+}
+
+// containsVersion reports whether the row plausibly affects version v: an
+// exact token match ("1.18.0" in the description) or containment in a parsed
+// affected range ("1.9.14 - 1.20.0" contains it).
 func (r *edbRow) containsVersion(v string) bool {
 	for _, t := range r.versions {
 		if t == v {
+			return true
+		}
+	}
+	for _, rg := range r.ranges {
+		if compareVersions(v, rg[0]) >= 0 && compareVersions(v, rg[1]) <= 0 {
 			return true
 		}
 	}
@@ -375,7 +448,7 @@ func (c *cveEnricher) lookup(fp fingerprint) []cveCandidate {
 	}
 	cands := c.localEDB(fp)
 	if len(cands) == 0 && c.online {
-		cands = c.nvdKeyword(fp)
+		cands = c.nvdProduct(fp)
 	}
 	if len(cands) > 0 && c.online {
 		c.tagOnline(cands)
@@ -529,62 +602,209 @@ func (c *cveEnricher) epssBatch(ids []string) map[string]float64 {
 	return out
 }
 
-// nvdKeyword is the fallback when the local DB has no hit: a keyword search
-// over product+version. Cruder than a CPE match — candidates are marked
-// source:"nvd" so the applicability gate in the skill does the filtering.
-func (c *cveEnricher) nvdKeyword(fp fingerprint) []cveCandidate {
-	if !c.nvdAllow() {
-		return nil
-	}
-	url := fmt.Sprintf("%s?keywordSearch=%s%%20%s", c.nvd, fp.Product, fp.Version)
-	body, err := c.get(url)
-	if err != nil {
-		return nil
-	}
-	var resp struct {
-		Vulnerabilities []struct {
-			CVE struct {
-				ID           string `json:"id"`
-				Descriptions []struct {
-					Lang  string `json:"lang"`
-					Value string `json:"value"`
-				} `json:"descriptions"`
-				Metrics struct {
-					CvssMetricV31 []struct {
-						CVSSData struct {
-							BaseSeverity string `json:"baseSeverity"`
-						} `json:"cvssData"`
-					} `json:"cvssMetricV31"`
-				} `json:"metrics"`
-			} `json:"cve"`
-		} `json:"vulnerabilities"`
-	}
-	if json.Unmarshal(body, &resp) != nil {
-		return nil
-	}
-	var out []cveCandidate
-	for _, v := range resp.Vulnerabilities {
-		cand := cveCandidate{
-			Product: fp.Product,
-			Version: fp.Version,
-			CVE:     v.CVE.ID,
-			Source:  "nvd",
+// cpeProducts maps normalized fingerprint products to their CPE 2.3 product
+// token where the two differ ("apache httpd" → a:apache:http_server). Unknown
+// products fall through to normalized containment matching.
+var cpeProducts = map[string]string{
+	"apache":            "http_server",
+	"apache httpd":      "http_server",
+	"apache http server": "http_server",
+	"microsoft iis":     "internet_information_server",
+	"iis":               "internet_information_server",
+	"internet information services": "internet_information_server",
+	"tomcat":            "tomcat",
+	"apache tomcat":     "tomcat",
+	"struts":            "struts",
+	"wordpress":         "wordpress",
+	"nginx":             "nginx",
+	"php":               "php",
+	"mysql":             "mysql",
+	"mariadb":           "mariadb",
+	"postgresql":        "postgresql",
+	"redis":             "redis",
+	"mongodb":           "mongodb",
+	"jenkins":           "jenkins",
+	"confluence":        "confluence_server",
+	"gitlab":            "gitlab",
+	"grafana":           "grafana",
+	"exim":              "exim",
+	"openssh":           "openssh",
+	"dropbear":          "dropbear_ssh_server",
+	"dovecot":           "dovecot",
+}
+
+func cpeNormalize(s string) string {
+	var b []byte
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b = append(b, byte(r))
 		}
-		for _, d := range v.CVE.Descriptions {
-			if d.Lang == "en" {
-				cand.Title = d.Value
-				break
+	}
+	return string(b)
+}
+
+// cpeProductMatch reports whether the fingerprint product corresponds to the
+// CPE criteria product token.
+func cpeProductMatch(fpProduct, cpeProduct string) bool {
+	if mapped, ok := cpeProducts[fpProduct]; ok {
+		if cpeNormalize(mapped) == cpeNormalize(cpeProduct) {
+			return true
+		}
+	}
+	fp, cpe := cpeNormalize(fpProduct), cpeNormalize(cpeProduct)
+	return fp != "" && cpe != "" && (strings.Contains(fp, cpe) || strings.Contains(cpe, fp))
+}
+
+// parseCPE splits "cpe:2.3:a:vendor:product:version:..." into vendor/product/
+// version. Indices after Split(":"): 0=cpe 1=2.3 2=a 3=vendor 4=product 5=version.
+func parseCPE(cpe string) (vendor, product, version string) {
+	parts := strings.Split(cpe, ":")
+	if len(parts) < 6 || parts[0] != "cpe" {
+		return "", "", ""
+	}
+	return parts[3], parts[4], parts[5]
+}
+
+// nvdProduct queries NVD by product keyword and filters client-side against
+// the fingerprint version using the CPE criteria ranges. Candidates are
+// marked source:"nvd" — the applicability gate in the skill still applies.
+func (c *cveEnricher) nvdProduct(fp fingerprint) []cveCandidate {
+	var out []cveCandidate
+	for page := 0; page < 3; page++ { // ≤3 pages: protects the unauth budget
+		if !c.nvdAllow() {
+			return out
+		}
+		url := fmt.Sprintf("%s?keywordSearch=%s&startIndex=%d", c.nvd, fp.Product, page*2000)
+		body, err := c.get(url)
+		if err != nil {
+			return out
+		}
+		var resp nvdResponse
+		if json.Unmarshal(body, &resp) != nil {
+			return out
+		}
+		for _, v := range resp.Vulnerabilities {
+			if !nvdVersionInRange(v, fp) {
+				continue
+			}
+			cand := cveCandidate{
+				Product: fp.Product,
+				Version: fp.Version,
+				CVE:     v.CVE.ID,
+				Source:  "nvd",
+			}
+			for _, d := range v.CVE.Descriptions {
+				if d.Lang == "en" {
+					cand.Title = d.Value
+					break
+				}
+			}
+			if len(v.CVE.Metrics.CvssMetricV31) > 0 {
+				cand.Type = "cvss:" + v.CVE.Metrics.CvssMetricV31[0].CVSSData.BaseSeverity
+			}
+			out = append(out, cand)
+			if len(out) >= 8 {
+				return out
 			}
 		}
-		if len(v.CVE.Metrics.CvssMetricV31) > 0 {
-			cand.Type = "cvss:" + v.CVE.Metrics.CvssMetricV31[0].CVSSData.BaseSeverity
-		}
-		out = append(out, cand)
-		if len(out) >= 8 {
+		if len(resp.Vulnerabilities) == 0 || resp.StartIndex+len(resp.Vulnerabilities) >= resp.TotalResults {
 			break
 		}
 	}
 	return out
+}
+
+type nvdVuln struct {
+	CVE struct {
+		ID           string `json:"id"`
+		Descriptions []struct {
+			Lang  string `json:"lang"`
+			Value string `json:"value"`
+		} `json:"descriptions"`
+		Metrics struct {
+			CvssMetricV31 []struct {
+				CVSSData struct {
+					BaseSeverity string `json:"baseSeverity"`
+				} `json:"cvssData"`
+			} `json:"cvssMetricV31"`
+		} `json:"metrics"`
+		Configurations []struct {
+			Nodes []struct {
+				CPEMatch []struct {
+					Vulnerable            bool   `json:"vulnerable"`
+					Criteria              string `json:"criteria"`
+					VersionStartIncluding string `json:"versionStartIncluding"`
+					VersionStartExcluding string `json:"versionStartExcluding"`
+					VersionEndIncluding   string `json:"versionEndIncluding"`
+					VersionEndExcluding   string `json:"versionEndExcluding"`
+				} `json:"cpeMatch"`
+			} `json:"nodes"`
+		} `json:"configurations"`
+	} `json:"cve"`
+}
+
+type nvdResponse struct {
+	TotalResults    int        `json:"totalResults"`
+	StartIndex      int        `json:"startIndex"`
+	Vulnerabilities []nvdVuln  `json:"vulnerabilities"`
+}
+
+// nvdVersionInRange checks the fingerprint (product, version) against the
+// CVE's CPE criteria. A criteria matches when the product corresponds AND the
+// version satisfies its bounds: concrete criteria version = equality,
+// "*" = the versionStart/versionEnd bounds (zero-padded numeric compare).
+func nvdVersionInRange(v nvdVuln, fp fingerprint) bool {
+	for _, cfg := range v.CVE.Configurations {
+		for _, node := range cfg.Nodes {
+			for _, m := range node.CPEMatch {
+				_, product, cpeVer := parseCPE(m.Criteria)
+				if !cpeProductMatch(fp.Product, product) {
+					continue
+				}
+				if cpeVer != "" && cpeVer != "*" {
+					if compareVersions(cpeVer, fp.Version) == 0 {
+						return true
+					}
+					continue
+				}
+				lo, hi := "", ""
+				if m.VersionStartIncluding != "" {
+					lo = m.VersionStartIncluding
+				} else if m.VersionStartExcluding != "" {
+					lo = m.VersionStartExcluding
+				}
+				if m.VersionEndIncluding != "" {
+					hi = m.VersionEndIncluding
+				} else if m.VersionEndExcluding != "" {
+					hi = m.VersionEndExcluding
+				}
+				if lo == "" && hi == "" {
+					continue // unbounded criteria: no version signal, skip
+				}
+				if lo != "" {
+					c := compareVersions(fp.Version, lo)
+					if m.VersionStartExcluding != "" && c <= 0 {
+						continue
+					}
+					if c < 0 {
+						continue
+					}
+				}
+				if hi != "" {
+					c := compareVersions(fp.Version, hi)
+					if m.VersionEndExcluding != "" && c >= 0 {
+						continue
+					}
+					if c > 0 {
+						continue
+					}
+				}
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // nvdAllow enforces the unauthenticated NVD budget locally (rolling window).
