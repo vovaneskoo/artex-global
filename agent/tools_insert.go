@@ -118,6 +118,23 @@ type assetInputItem struct {
 	Params []map[string]any `json:"params"`
 }
 
+// versionedTechnologies picks the technology entries that carry a version
+// number (e.g. "Nginx 1.18.0", "PHP/7.4.33" — whatweb/wappalyzer style) so the
+// enrich engine can look up exploit candidates. Entries without digits are
+// dropped: no version evidence, no CVE claim.
+func versionedTechnologies(techs []string) string {
+	var out []string
+	for _, t := range techs {
+		for _, r := range t {
+			if r >= '0' && r <= '9' {
+				out = append(out, t)
+				break
+			}
+		}
+	}
+	return strings.Join(out, "; ")
+}
+
 // insertAssets is the unified insert_assets agent tool.
 func (t *ToolSet) insertAssets() actool.CoreTool {
 	return writeTool(
@@ -362,6 +379,24 @@ func (t *ToolSet) insertAssets() actool.CoreTool {
 						svcIP = item.IP
 					}
 					_ = t.as.AddAutoScope(taskID, typ, item.Domain, item.URL, svcIP)
+				}
+				// 引擎侧异步 enrichment（enrich 包）：域名→DNS 解析，HTTP 服务→引擎自带
+				// 探测（标题/状态码/版本头），technologies 带版本号→CVE 候选（extra.cve）。
+				// 结果都写回资产，worker 下一轮 list_assets 即可看到，不消耗 LLM 调用。
+				if t.enrich != nil {
+					switch typ {
+					case "root_domain", "subdomain":
+						if item.Domain != "" {
+							t.enrich.ResolveDomain(id, item.Domain)
+						}
+					case "service":
+						if item.URL != "" {
+							t.enrich.ProbeSite(id, item.URL)
+						}
+						if fp := versionedTechnologies(item.Technologies); fp != "" {
+							t.enrich.ResearchCVE(id, fp)
+						}
+					}
 				}
 			}
 

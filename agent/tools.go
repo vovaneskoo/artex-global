@@ -134,6 +134,7 @@ func (t *ToolSet) SetNotifyFinding(fn func(int64, string)) { t.notifyFinding = f
 type EnrichTrigger interface {
 	ResolveDomain(id int64, host string)
 	ProbeSite(id int64, url string)
+	ResearchCVE(id int64, fingerprint string)
 }
 
 // WriteCounts breaks down what a worker persisted this run, by node kind, so the
