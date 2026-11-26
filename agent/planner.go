@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/intercept"
@@ -393,6 +394,14 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	// planner 收尾词作为【本轮操作指令】拼进本轮 user 输入(随 situational),让它只做最后
 	// 目标判定、不产新意图。
 	tc := taskClockFrom(ctx)
+	// Cost-aware: показываем планировщику оставшееся время и прошедшее — он сам
+	// решает, какие интенты влезают в бюджет (дешёвый recon vs дорогой exploit).
+	if tc.DeadlineUnix > 0 && !tc.Final {
+		remaining := time.Until(time.Unix(tc.DeadlineUnix, 0)).Round(time.Second)
+		if remaining > 0 {
+			situational += "\n\n【Остаток бюджета】：" + fmt.Sprintf("до дедлайна задачи осталось %s. Планируй соответственно: дешёвые направления (recon, проверка краёв) — всегда; дорогие (fuzz, brute, многозаходные цепочки) — только если точно влезают.", remaining)
+		}
+	}
 	if tc.Final {
 		situational += "\n\n【任务终局收尾（本轮特殊指令，覆盖上面的常规规划流程）】：" + resolveTaskTimeoutWrapup("planner")
 	}

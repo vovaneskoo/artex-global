@@ -53,6 +53,7 @@ type WebSearchOpts struct {
 
 type Worker struct {
 	findingRecorder FindingRecorder
+	autopilotCVE    func(assetIDs []int64, findingNodeID int64, summary string)
 	prov            llm.Provider
 	model           string
 	workDir         string
@@ -117,6 +118,11 @@ func hasWorkerChatMessage(messages []llm.Message, requestID string) bool {
 func (w *Worker) SetNonStreaming(fn func() bool) { w.nonStreamingFn = fn }
 
 func (w *Worker) nonStreaming() bool { return w.nonStreamingFn != nil && w.nonStreamingFn() }
+
+// SetAutopilotCVE wires the CVE autopilot callback: when report_finding fires,
+// the engine checks the finding's assets for CVE candidates and auto-spawns an
+// exploit-assessment intent. nil/unset = no autopilot.
+func (w *Worker) SetAutopilotCVE(fn func([]int64, int64, string)) { w.autopilotCVE = fn }
 
 // SetNoaEnabled wires a resolver deciding whether runs use the experimental noa
 // context-compression mechanism. nil/unset = off (built-in compaction). Read per
@@ -379,6 +385,7 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	tsx.SetOwnerNode(intent.ID)         // assets this worker discovers anchor to its intent → visible to the task
 	tsx.SetEnrich(enr)                  // async DNS/HTTP auto-completion for assets this worker writes
 	tsx.SetNotifyFinding(notifyFinding) // report_finding 落库时当场唤醒 planner，带上「哪个意图+finding」
+	tsx.SetAutopilotCVE(w.autopilotCVE) // finding→CVE candidates→auto-spawn exploit-assessment intent
 	// base = built-in worker tools ∪ host tools (traffic) ∪ default tools (incl. Bash);
 	// then augment with the agent's visible skills/MCP. During the SDK settlement
 	// phase, Bash is hidden via Settlement.DisabledTools (no local gating needed).

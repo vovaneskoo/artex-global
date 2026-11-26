@@ -88,6 +88,10 @@ type ToolSet struct {
 	// carrying (intentID, summary) so the round can spell out which intent found what.
 	// Wired for workers; nil elsewhere → falls back to notify (bare wake).
 	notifyFinding func(intentID int64, summary string)
+	// autopilotCVE, if set, fires when a finding is reported with asset IDs — the
+	// engine checks those assets for CVE candidates and auto-spawns an
+	// exploit-assessment intent if any exist. nil = no autopilot.
+	autopilotCVE func(assetIDs []int64, findingNodeID int64, summary string)
 	// resumeTask, if set, revives the task after a graph change that should make a
 	// stopped task run again (currently: set_goals adds a goal). It flips a terminal/
 	// paused task back to running and (re)starts the engine loops — a plain notify()
@@ -128,6 +132,11 @@ func (t *ToolSet) SetNotify(fn func()) { t.notify = fn }
 
 // SetNotifyFinding wires the finding-wake callback (see ToolSet.notifyFinding).
 func (t *ToolSet) SetNotifyFinding(fn func(int64, string)) { t.notifyFinding = fn }
+
+// SetAutopilotCVE wires the CVE autopilot: when a finding is reported, the
+// engine checks the finding's assets for CVE candidates and auto-spawns an
+// exploit-assessment intent if any exist.
+func (t *ToolSet) SetAutopilotCVE(fn func([]int64, int64, string)) { t.autopilotCVE = fn }
 
 // EnrichTrigger is the enrichment engine seen from the tool layer (see package
 // enrich). Kept as an interface here to avoid coupling agent → enrich.
@@ -1286,6 +1295,11 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 			t.notifyFinding(iid, a.Summary)
 		} else if t.notify != nil {
 			t.notify()
+		}
+		// CVE autopilot: fire after the finding is recorded so the engine can
+		// check the affected assets for CVE candidates and auto-spawn an intent.
+		if t.autopilotCVE != nil {
+			t.autopilotCVE(input.AssetIDs, recorded.NodeID, a.Summary)
 		}
 		t.writes.Findings++
 		// Keep the first line's node-ID contract for existing reporter triggers.
