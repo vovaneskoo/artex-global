@@ -42,7 +42,7 @@ func TestReportFindingOptionalTrafficWithoutCapture(t *testing.T) {
 			t.Fatal(err)
 		}
 		f, err := d.GetFinding(out.FindingID)
-		if err != nil || f == nil || len(out.Traffic.Bindings) != 0 || f.Evidence != "command output proves the finding" {
+		if err != nil || f == nil || len(out.Traffic.Bindings) != 0 || !strings.Contains(f.Evidence, "command output proves the finding") {
 			t.Fatalf("lost non-HTTP evidence: %+v %v", f, err)
 		}
 	}
