@@ -182,6 +182,10 @@ func defaultToolsExcept(exclude ...string) []actool.CoreTool {
 
 func (w *Worker) SetCompactionWindowResolver(fn func() int) { w.windowFn = fn }
 
+// workerToolOutputChars caps one tool result in the worker transcript; the full
+// text stays on disk under cmd-output/ for follow-up reads.
+const workerToolOutputChars = 12000
+
 func (w *Worker) compactionWindow() int {
 	if w.windowFn != nil {
 		return w.windowFn()
@@ -477,12 +481,15 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		// 因步数=夹逼窗口内步数先耗尽→回落 per-run 词。非 clamped 维持纯 per-run。
 		Settlement: settle,
 		// large tool output spills to cmd-output/ with a head + pointer (SDK tool.Capture);
-		// full output preserved on disk. 截断上限用 SDK 默认(30000 字符)。
-		ToolOutputDir: cmdOutDir(runDir),
-		Compaction:    compactionConfig(w.compactionWindow()), // long tool-heavy runs stay within the window
-		Todos:         actool.NewTodoStore(),                  // 会话级临时待办（TodoWrite），纯规划用，退出即丢
-		NonStreaming:  w.nonStreaming(),                       // 该 profile 选非流式时走 Provider.Complete
-		MaxTokens:     w.maxTokens(),                          // 0 = 不发上限,由服务端默认值决定
+		// full output preserved on disk. Worker 的窗口比 SDK 默认更紧：nmap/nuclei
+		// 动辄数万字符，默认 30k 会把上百 KB 噪声灌进后续每一轮上下文（313 实测
+		// 平均 24k input/调用）。12k 头+尾足够判断，全量仍可按指针 Read。
+		ToolOutputDir:      cmdOutDir(runDir),
+		MaxToolOutputChars: workerToolOutputChars,
+		Compaction:         compactionConfig(w.compactionWindow()), // long tool-heavy runs stay within the window
+		Todos:              actool.NewTodoStore(),                  // 会话级临时待办（TodoWrite），纯规划用，退出即丢
+		NonStreaming:       w.nonStreaming(),                       // 该 profile 选非流式时走 Provider.Complete
+		MaxTokens:          w.maxTokens(),                          // 0 = 不发上限,由服务端默认值决定
 	}
 	if hooks != nil { // typed-nil guard: only set when concrete (avoids harness panic)
 		opts.Hooks = hooks

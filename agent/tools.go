@@ -17,12 +17,33 @@ import (
 // upstream nodes it derived from: facts/intents/findings) and yields (the facts/
 // findings it produced) — without pulling full payloads. parentsOf/yieldsOf are
 // built from the exploration edges in graph_overview.
+// overviewSummaryChars caps one summary inside the per-round graph overview.
+// Full text stays available via node_detail/list_* — the overview just needs
+// enough to recognise a node, and unbounded summaries otherwise dominate the
+// context of every worker and planner call.
+const overviewSummaryChars = 240
+
+func clipSummary(v any) any {
+	s, ok := v.(string)
+	if !ok {
+		text := strings.TrimSpace(fmt.Sprint(v))
+		if len(text) <= overviewSummaryChars {
+			return text
+		}
+		s = text
+	}
+	if r := []rune(s); len(r) > overviewSummaryChars {
+		return string(r[:overviewSummaryChars]) + "…"
+	}
+	return s
+}
+
 func compactIntents(ns []*db.Node, parentsOf, yieldsOf map[int64][]int64) []map[string]any {
 	out := make([]map[string]any, 0, len(ns))
 	for _, n := range ns {
 		var p map[string]any
 		_ = json.Unmarshal(n.Payload, &p)
-		m := map[string]any{"id": n.ID, "summary": p["summary"], "state": n.State}
+		m := map[string]any{"id": n.ID, "summary": clipSummary(p["summary"]), "state": n.State}
 		if n.Inherited {
 			m["source_task_id"] = n.SourceTaskID
 			m["inherited"] = true
@@ -467,7 +488,7 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 		}
 		var fp map[string]any
 		_ = json.Unmarshal(n.Payload, &fp)
-		m := map[string]any{"id": n.ID, "summary": fp["summary"]}
+		m := map[string]any{"id": n.ID, "summary": clipSummary(fp["summary"])}
 		if from := factFrom[n.ID]; from > 0 {
 			m["from_intent"] = from // 本漏洞由哪个意图产生
 		}
@@ -477,7 +498,7 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 	// recent_facts：非折叠事实里最新的一窗（≤N，factNodes 按 id 降序即最新在前）。已折进
 	// digest 且仍冷的（hidden）走 cold_digests，不在此重复。每条 {id, summary, from_intent?,
 	// confidence?}；evidence 等详情用 node_detail(id)。更早的用 list_facts 翻。
-	const recentFactsCap = 20
+	const recentFactsCap = 12
 	recentFacts := make([]map[string]any, 0, recentFactsCap)
 	for _, n := range factNodes {
 		if len(recentFacts) >= recentFactsCap {
@@ -884,7 +905,7 @@ func inheritedIntentSummaryState(state string) bool {
 func compactNode(n *db.Node) map[string]any {
 	var p map[string]any
 	_ = json.Unmarshal(n.Payload, &p)
-	m := map[string]any{"id": n.ID, "state": n.State, "summary": p["summary"]}
+	m := map[string]any{"id": n.ID, "state": n.State, "summary": clipSummary(p["summary"])}
 	if n.Inherited {
 		inheritedMap(m, n.SourceTaskID)
 	}
@@ -895,7 +916,7 @@ func compactNode(n *db.Node) map[string]any {
 func compactFinding(n *db.Node) map[string]any {
 	var p map[string]any
 	_ = json.Unmarshal(n.Payload, &p)
-	m := map[string]any{"id": n.ID, "state": n.State, "summary": p["summary"]}
+	m := map[string]any{"id": n.ID, "state": n.State, "summary": clipSummary(p["summary"])}
 	if n.Inherited {
 		inheritedMap(m, n.SourceTaskID)
 	}
