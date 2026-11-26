@@ -42,6 +42,9 @@ command -v go >/dev/null || { echo "go not found" >&2; exit 1; }
   rsync -a --delete web/out/ server/webui/dist/
 }
 
+echo "[*] validating exploit library contract"
+python3 scripts/exploit-feed/validate_exploits.py
+
 echo "[*] cross-compiling linux/$ARCH"
 mkdir -p "dist/$ARCH"
 CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" GOFLAGS=-buildvcs=false \
