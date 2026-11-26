@@ -335,6 +335,21 @@ type RecordedFinding struct {
 	FindingID int64           `json:"finding_id,string"`
 	NodeID    int64           `json:"finding_node_id,string"`
 	Traffic   *FindingTraffic `json:"traffic"`
+	// Deduped means no new finding was inserted: FoundID/NodeID point at an
+	// existing confirmed finding of the same class on overlapping assets.
+	Deduped bool `json:"deduped,omitempty"`
+}
+
+// findingName falls back to the vulnclass when the model omits a name, so the
+// findings list never renders blank rows.
+func findingName(name, vulnClass, findingIDStr string) string {
+	if strings.TrimSpace(name) != "" {
+		return name
+	}
+	if v := strings.TrimSpace(vulnClass); v != "" {
+		return v
+	}
+	return "finding " + findingIDStr
 }
 
 // ctx 由调用方传入本次事务所用的上下文（而非在内部取 context.Background）：
@@ -361,8 +376,19 @@ func RecordFindingTx(ctx context.Context, tx *sql.Tx, in RecordFindingInput, pre
 			return nil, errors.New("intent_id 必须是本任务的意图（关联任务意图只读）")
 		}
 	}
-	payload, _ := json.Marshal(map[string]any{"vulnclass": in.VulnClass, "name": in.Name, "severity": in.Severity, "summary": in.Summary, "evidence": map[string]any{"by": in.Worker, "poc": in.Evidence}})
+	in.Name = findingName(in.Name, in.VulnClass, "")
 	out := &RecordedFinding{}
+	// Duplicate guard: the same class on overlapping assets with a near-identical
+	// summary is the same finding reported twice (e.g. one per worker retry).
+	// Reuse the existing record instead of inflating counters and notifications.
+	if dupID, dupNode, ok, err := findDuplicateFindingTx(tx, in); err != nil {
+		return nil, err
+	} else if ok {
+		out.FindingID, out.NodeID, out.Deduped = dupID, dupNode, true
+		out.Traffic, err = FindingTrafficTx(tx, out.FindingID)
+		return out, err
+	}
+	payload, _ := json.Marshal(map[string]any{"vulnclass": in.VulnClass, "name": in.Name, "severity": in.Severity, "summary": in.Summary, "evidence": map[string]any{"by": in.Worker, "poc": in.Evidence}})
 	if err := tx.QueryRow(`INSERT INTO exploration_nodes(exploration_id,kind,payload,priority,state,origin)
 VALUES($1,'finding',$2,9,'confirmed',$3) RETURNING id`, in.ExplorationID, string(payload), in.Worker).Scan(&out.NodeID); err != nil {
 		return nil, err
@@ -405,6 +431,101 @@ VALUES(NULLIF($1,0),$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, in.TaskID, out.NodeI
 	var err error
 	out.Traffic, err = FindingTrafficTx(tx, out.FindingID)
 	return out, err
+}
+
+// findDuplicateFindingTx looks for an existing confirmed finding of the same
+// task (or task-less/no-task scope) with the same vulnclass, an overlapping
+// asset set and a near-identical summary.
+func findDuplicateFindingTx(tx *sql.Tx, in RecordFindingInput) (id, nodeID int64, ok bool, err error) {
+	if strings.TrimSpace(in.Summary) == "" {
+		return 0, 0, false, nil
+	}
+	rows, err := tx.Query(`SELECT f.id, f.node_id, f.summary, COALESCE(f.asset_ids,'[]')
+		FROM findings f
+		JOIN exploration_nodes n ON n.id=f.node_id
+		WHERE COALESCE(f.task_id,0)=$1 AND n.state='confirmed' AND lower(btrim(f.vulnclass))=lower(btrim($2))
+		ORDER BY f.id DESC LIMIT 50`, in.TaskID, in.VulnClass)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid   int64
+			cnode int64
+			csum  string
+			craw  string
+		)
+		if err := rows.Scan(&cid, &cnode, &csum, &craw); err != nil {
+			return 0, 0, false, err
+		}
+		var assets []int64
+		_ = json.Unmarshal([]byte(craw), &assets)
+		if !assetsOverlap(assets, in.AssetIDs) {
+			continue
+		}
+		if findingsSimilar(csum, in.Summary) {
+			return cid, cnode, true, nil
+		}
+	}
+	return 0, 0, false, rows.Err()
+}
+
+func assetsOverlap(a, b []int64) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return len(a) == 0 && len(b) == 0
+	}
+	set := make(map[int64]bool, len(a))
+	for _, x := range a {
+		set[x] = true
+	}
+	hits := 0
+	for _, y := range b {
+		if set[y] {
+			hits++
+		}
+	}
+	small := len(a)
+	if len(b) < small {
+		small = len(b)
+	}
+	return hits > 0 && float64(hits)/float64(len(a)+len(b)-hits) >= 0.4
+}
+
+// findingsSimilar compares token sets; one-ish wording drift still counts as a
+// duplicate. Short strings fall back to a containment check.
+func findingsSimilar(a, b string) bool {
+	ta, tb := findingTokens(a), findingTokens(b)
+	if len(ta) == 0 || len(tb) == 0 {
+		return false
+	}
+	sa := make(map[string]bool, len(ta))
+	for _, t := range ta {
+		sa[t] = true
+	}
+	hits := 0
+	for _, t := range tb {
+		if sa[t] {
+			hits++
+		}
+	}
+	union := len(ta) + len(tb) - hits
+	jaccard := float64(hits) / float64(union)
+	if jaccard >= 0.6 {
+		return true
+	}
+	// Very short summaries: "SQLi in /search" vs "SQLi in search endpoint".
+	na, nb := strings.ToLower(strings.TrimSpace(a)), strings.ToLower(strings.TrimSpace(b))
+	if len(na) > 10 && len(nb) > 10 && (strings.Contains(na, nb) || strings.Contains(nb, na)) {
+		return true
+	}
+	return false
+}
+
+func findingTokens(s string) []string {
+	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !(r == '-' || r == '_' || r == '/' || r == ':' || r == '.' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || r >= 0x80)
+	})
 }
 
 // RecordFinding is the atomic legacy/no-recorder path used by tools and tests.

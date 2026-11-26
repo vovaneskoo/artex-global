@@ -33,11 +33,12 @@ func TestReportFindingOptionalTrafficWithoutCapture(t *testing.T) {
 	ts.notifyFinding = func(int64, string) { notices++ }
 	for _, refs := range []string{"", `,"traffic_refs":[]`, `,"traffic_refs":null`} {
 		res, err := ts.addFinding().Call(t.Context(), json.RawMessage(`{"vulnclass":"TCP","severity":"low","summary":"verified TCP fixture","evidence":"command output proves the finding"`+refs+`}`), nil)
-		if err != nil || !strings.HasPrefix(res.Flatten(), "finding recorded: ") {
-			t.Fatalf("optional traffic rejected: %v %s", err, res.Flatten())
+		flat := res.Flatten()
+		if err != nil || !(strings.HasPrefix(flat, "finding recorded: ") || strings.HasPrefix(flat, "finding duplicate (reused): ")) {
+			t.Fatalf("optional traffic rejected: %v %s", err, flat)
 		}
 		var out db.RecordedFinding
-		if err := json.Unmarshal([]byte(strings.SplitN(res.Flatten(), "\n", 2)[1]), &out); err != nil {
+		if err := json.Unmarshal([]byte(strings.SplitN(flat, "\n", 2)[1]), &out); err != nil {
 			t.Fatal(err)
 		}
 		f, err := d.GetFinding(out.FindingID)
@@ -45,8 +46,9 @@ func TestReportFindingOptionalTrafficWithoutCapture(t *testing.T) {
 			t.Fatalf("lost non-HTTP evidence: %+v %v", f, err)
 		}
 	}
-	if notices != 3 {
-		t.Fatalf("successful reports notified %d times", notices)
+	// Three identical reports of the same finding collapse into one record.
+	if notices != 1 {
+		t.Fatalf("identical report notified %d times, want 1", notices)
 	}
 }
 

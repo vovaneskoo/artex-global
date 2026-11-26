@@ -1246,7 +1246,7 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 		"evidence_hint_id": idp("可选：本任务中对应此漏洞的提示节点 ID，自动携带其结构化 traffic_refs；不能引用继承提示或其他漏洞的提示"),
 		"traffic_refs": map[string]any{"type": "array", "description": "可选；HTTP/HTTPS 漏洞先检索并逐条核实请求/响应确实支持漏洞结论，再按复现顺序填写真实 ID。TCP 等非 HTTP 漏洞、未采集或找不到确切记录时省略或传 []，不阻止上报；可在 evidence 说明原因并提供其他可验证证据。不要猜测 ID、按域名/时间推定关联或仅为补包重复探测。用途 baseline 正常对照 / proof 漏洞证明 / verification 补充验证 / supporting 辅助证据。",
 			"items": obj(map[string]any{"traffic_id": str("traffic_search 返回的真实流量 ID"), "role": map[string]any{"type": "string", "enum": []string{"baseline", "proof", "verification", "supporting"}}, "note": str("该流量如何支持漏洞结论")}, "traffic_id")},
-	}, "vulnclass", "severity", "summary"), func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
+	}, "vulnclass", "name", "severity", "summary"), func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 		var a struct {
 			VulnClass, Name, Severity, Summary, Evidence string
 			IntentID                                     json.RawMessage   `json:"intent_id"`
@@ -1287,7 +1287,13 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 		if err != nil {
 			return actool.Errorf(err.Error()), nil
 		}
-		if t.notifyFinding != nil {
+		// A deduped finding has already been announced: keep the UI refresh but
+		// skip the finding-pill notification so reporters do not fire twice.
+		if recorded.Deduped {
+			if t.notify != nil {
+				t.notify()
+			}
+		} else if t.notifyFinding != nil {
 			iid := input.IntentID
 			if iid <= 0 {
 				iid = t.ownerNode
@@ -1319,8 +1325,16 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 				result.EvidenceNote = "漏洞已保存。Agent 自动绑定流量已关闭，可在页面人工关联流量。"
 			}
 		}
+		if recorded.Deduped {
+			result.EvidenceStatus = "duplicate"
+			result.EvidenceNote = "重复上报：未新建记录，沿用既有 finding_id。若要补充证据/流量，用 bind_finding_traffic 绑定到该 finding，不要再次 report_finding。"
+		}
 		raw, _ := json.Marshal(result)
-		return actool.Text(fmt.Sprintf("finding recorded: %d\n%s", recorded.NodeID, raw)), nil
+		head := "finding recorded"
+		if recorded.Deduped {
+			head = "finding duplicate (reused)"
+		}
+		return actool.Text(fmt.Sprintf("%s: %d\n%s", head, recorded.NodeID, raw)), nil
 	})
 }
 
