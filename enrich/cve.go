@@ -360,7 +360,7 @@ func productWordsMatch(desc, product string) bool {
 
 const (
 	kevURL   = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
-	epssURL  = "https://api.first.org/epss"
+	epssURL  = "https://api.first.org/data/v1/epss" // NB: /epss is the HTML docs page; the data API lives under /data/v1
 	nvdURL   = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 	nvdWindow = 30 * time.Second
 	nvdBurst  = 5
@@ -568,17 +568,14 @@ func (c *cveEnricher) epssBatch(ids []string) map[string]float64 {
 	if len(missing) == 0 {
 		return out
 	}
-	// one GET can carry up to 100 cve params
+	// one GET carries a comma-joined cve list (docs cap the param at 2000 chars)
 	for len(missing) > 0 {
 		batch := missing
-		if len(batch) > 100 {
-			batch = batch[:100]
+		if len(batch) > 80 {
+			batch = batch[:80]
 		}
 		missing = missing[len(batch):]
-		url := c.epss + "?"
-		for _, id := range batch {
-			url += "cve=" + id + "&"
-		}
+		url := c.epss + "?cve=" + strings.Join(batch, ",")
 		body, err := c.get(url)
 		if err != nil {
 			continue // fail-soft: candidates simply carry no EPSS
@@ -602,35 +599,38 @@ func (c *cveEnricher) epssBatch(ids []string) map[string]float64 {
 	return out
 }
 
-// cpeProducts maps normalized fingerprint products to their CPE 2.3 product
-// token where the two differ ("apache httpd" → a:apache:http_server). Unknown
-// products fall through to normalized containment matching.
-var cpeProducts = map[string]string{
-	"apache":            "http_server",
-	"apache httpd":      "http_server",
-	"apache http server": "http_server",
-	"microsoft iis":     "internet_information_server",
-	"iis":               "internet_information_server",
-	"internet information services": "internet_information_server",
-	"tomcat":            "tomcat",
-	"apache tomcat":     "tomcat",
-	"struts":            "struts",
-	"wordpress":         "wordpress",
-	"nginx":             "nginx",
-	"php":               "php",
-	"mysql":             "mysql",
-	"mariadb":           "mariadb",
-	"postgresql":        "postgresql",
-	"redis":             "redis",
-	"mongodb":           "mongodb",
-	"jenkins":           "jenkins",
-	"confluence":        "confluence_server",
-	"gitlab":            "gitlab",
-	"grafana":           "grafana",
-	"exim":              "exim",
-	"openssh":           "openssh",
-	"dropbear":          "dropbear_ssh_server",
-	"dovecot":           "dovecot",
+// cpeProducts maps normalized fingerprint products to their exact CPE 2.3
+// (vendor, product) pair where the tokens differ from the colloquial name.
+// Matching is equality-based: a "nginx" fingerprint must NOT match the CPE of
+// nginx-ui / Nginx Proxy Manager / nginx-ingress (different products whose
+// names merely contain "nginx").
+var cpeProducts = map[string][2]string{
+	"nginx":             {"nginx", "nginx"},
+	"apache":            {"apache", "http_server"},
+	"apache httpd":      {"apache", "http_server"},
+	"apache http server": {"apache", "http_server"},
+	"microsoft iis":     {"microsoft", "internet_information_server"},
+	"iis":               {"microsoft", "internet_information_server"},
+	"internet information services": {"microsoft", "internet_information_server"},
+	"tomcat":            {"apache", "tomcat"},
+	"apache tomcat":     {"apache", "tomcat"},
+	"struts":            {"apache", "struts"},
+	"apache struts":     {"apache", "struts"},
+	"wordpress":         {"wordpress", "wordpress"},
+	"php":               {"php", "php"},
+	"mysql":             {"mysql", "mysql"},
+	"mariadb":           {"mariadb", "mariadb"},
+	"postgresql":        {"postgresql", "postgresql"},
+	"redis":             {"redis", "redis"},
+	"mongodb":           {"mongodb", "mongodb"},
+	"jenkins":           {"jenkins", "jenkins"},
+	"confluence":        {"atlassian", "confluence_server"},
+	"gitlab":            {"gitlab", "gitlab"},
+	"grafana":           {"grafana", "grafana"},
+	"exim":              {"exim", "exim"},
+	"openssh":           {"openbsd", "openssh"},
+	"dropbear":          {"matt_johnston", "dropbear_ssh_server"},
+	"dovecot":           {"dovecot", "dovecot"},
 }
 
 func cpeNormalize(s string) string {
@@ -645,15 +645,15 @@ func cpeNormalize(s string) string {
 }
 
 // cpeProductMatch reports whether the fingerprint product corresponds to the
-// CPE criteria product token.
-func cpeProductMatch(fpProduct, cpeProduct string) bool {
+// CPE criteria (vendor, product). Known products match their mapped pair
+// exactly; unknown products require normalized product-token equality so that
+// e.g. "nginx" never matches "nginx_ui" or "nginx_proxy_manager".
+func cpeProductMatch(fpProduct, cpeVendor, cpeProduct string) bool {
 	if mapped, ok := cpeProducts[fpProduct]; ok {
-		if cpeNormalize(mapped) == cpeNormalize(cpeProduct) {
-			return true
-		}
+		return cpeNormalize(mapped[0]) == cpeNormalize(cpeVendor) &&
+			cpeNormalize(mapped[1]) == cpeNormalize(cpeProduct)
 	}
-	fp, cpe := cpeNormalize(fpProduct), cpeNormalize(cpeProduct)
-	return fp != "" && cpe != "" && (strings.Contains(fp, cpe) || strings.Contains(cpe, fp))
+	return cpeNormalize(fpProduct) == cpeNormalize(cpeProduct) && cpeProduct != ""
 }
 
 // parseCPE splits "cpe:2.3:a:vendor:product:version:..." into vendor/product/
@@ -758,8 +758,8 @@ func nvdVersionInRange(v nvdVuln, fp fingerprint) bool {
 	for _, cfg := range v.CVE.Configurations {
 		for _, node := range cfg.Nodes {
 			for _, m := range node.CPEMatch {
-				_, product, cpeVer := parseCPE(m.Criteria)
-				if !cpeProductMatch(fp.Product, product) {
+				vendor, product, cpeVer := parseCPE(m.Criteria)
+				if !cpeProductMatch(fp.Product, vendor, product) {
 					continue
 				}
 				if cpeVer != "" && cpeVer != "*" {
