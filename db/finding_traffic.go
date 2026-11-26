@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -384,6 +385,9 @@ func RecordFindingTx(ctx context.Context, tx *sql.Tx, in RecordFindingInput, pre
 	if dupID, dupNode, ok, err := findDuplicateFindingTx(tx, in); err != nil {
 		return nil, err
 	} else if ok {
+		if err := mergeDuplicateFindingTx(tx, dupID, dupNode, in); err != nil {
+			return nil, err
+		}
 		out.FindingID, out.NodeID, out.Deduped = dupID, dupNode, true
 		out.Traffic, err = FindingTrafficTx(tx, out.FindingID)
 		return out, err
@@ -440,11 +444,11 @@ func findDuplicateFindingTx(tx *sql.Tx, in RecordFindingInput) (id, nodeID int64
 	if strings.TrimSpace(in.Summary) == "" {
 		return 0, 0, false, nil
 	}
-	rows, err := tx.Query(`SELECT f.id, f.node_id, f.summary, COALESCE(f.asset_ids,'[]')
+	rows, err := tx.Query(`SELECT f.id, f.node_id, f.vulnclass, f.summary, COALESCE(f.asset_ids,'[]')
 		FROM findings f
 		JOIN exploration_nodes n ON n.id=f.node_id
-		WHERE COALESCE(f.task_id,0)=$1 AND n.state='confirmed' AND lower(btrim(f.vulnclass))=lower(btrim($2))
-		ORDER BY f.id DESC LIMIT 50`, in.TaskID, in.VulnClass)
+		WHERE COALESCE(f.task_id,0)=$1 AND n.state='confirmed'
+		ORDER BY f.id DESC LIMIT 50`, in.TaskID)
 	if err != nil {
 		return 0, 0, false, err
 	}
@@ -453,10 +457,11 @@ func findDuplicateFindingTx(tx *sql.Tx, in RecordFindingInput) (id, nodeID int64
 		var (
 			cid   int64
 			cnode int64
+			cvc   string
 			csum  string
 			craw  string
 		)
-		if err := rows.Scan(&cid, &cnode, &csum, &craw); err != nil {
+		if err := rows.Scan(&cid, &cnode, &cvc, &csum, &craw); err != nil {
 			return 0, 0, false, err
 		}
 		var assets []int64
@@ -464,7 +469,15 @@ func findDuplicateFindingTx(tx *sql.Tx, in RecordFindingInput) (id, nodeID int64
 		if !assetsOverlap(assets, in.AssetIDs) {
 			continue
 		}
-		if findingsSimilar(csum, in.Summary) {
+		if strings.EqualFold(strings.TrimSpace(cvc), strings.TrimSpace(in.VulnClass)) {
+			if findingsSimilar(csum, in.Summary) || findingsShareTarget(csum, in.Summary, 1) {
+				return cid, cnode, true, nil
+			}
+			continue
+		}
+		// Cross-class angle needs two independent shared facts, otherwise two
+		// different bug classes on the same endpoint would collapse.
+		if findingsShareTarget(csum, in.Summary, 2) {
 			return cid, cnode, true, nil
 		}
 	}
@@ -520,6 +533,101 @@ func findingsSimilar(a, b string) bool {
 		return true
 	}
 	return false
+}
+
+// findingsSameTarget catches the "second angle on the same observation": the two
+// workers describe different consequences of one leak/endpoint, so wording barely
+// overlaps, but the same concrete entity (host:port, path, version, quoted token)
+// appears in both. Cross-angle reports get merged with their detail preserved in
+// the evidence trail.
+func findingsShareTarget(a, b string, minShared int) bool {
+	sa, sb := findingSignatures(a), findingSignatures(b)
+	if len(sa) == 0 || len(sb) == 0 {
+		return false
+	}
+	shared, pathHit := 0, false
+	for t := range sa {
+		if !sb[t] {
+			continue
+		}
+		shared++
+		if strings.Contains(t, "/") || strings.Contains(t, "cve-") {
+			pathHit = true
+		}
+	}
+	// A single bare host:port token is not enough — two different endpoints on
+	// one host would collapse. With minShared=1 a path/CVE token suffices.
+	if shared >= 2 || minShared <= 1 && pathHit {
+		return true
+	}
+	return shared >= 1 && minShared <= 1
+}
+
+var findingSignatureRe = regexp.MustCompile("`[^`]+`|\"[^\"]+\"|'[^']+'")
+
+// findingSignatures extracts concrete target tokens: quoted verbatims plus any
+// word carrying a digit, dot, slash, colon, dash or underscore (127.0.0.1:18302,
+// /rest/memories, 16.15, CVE-2015-3306).
+func findingSignatures(s string) map[string]bool {
+	out := map[string]bool{}
+	for _, q := range findingSignatureRe.FindAllString(s, -1) {
+		if v := strings.ToLower(strings.Trim(q, "`\"' ")); len(v) >= 3 {
+			out[v] = true
+		}
+	}
+	for _, f := range strings.Fields(strings.ToLower(s)) {
+		f = strings.Trim(f, "()[]{}.,;:!?")
+		if len(f) >= 4 && strings.ContainsAny(f, "0123456789/.:_-") {
+			out[f] = true
+		}
+	}
+	return out
+}
+
+// mergeDuplicateFindingTx folds a duplicate report into the surviving finding:
+// union of anchors/assets plus the extra summary and PoC appended to the
+// evidence trail so no information is lost.
+func mergeDuplicateFindingTx(tx *sql.Tx, findingID, nodeID int64, in RecordFindingInput) error {
+	extra := strings.TrimSpace(in.Summary)
+	if poc := strings.TrimSpace(in.Evidence); poc != "" {
+		extra += "\n" + poc
+	}
+	by := strings.TrimSpace(in.Worker)
+	if by == "" {
+		by = "unknown"
+	}
+	if _, err := tx.Exec(`UPDATE findings
+		SET evidence = COALESCE(NULLIF(evidence,''),'') ||
+			CASE WHEN COALESCE(NULLIF(evidence,''),'')='' THEN '' ELSE E'\n\n' END ||
+			$2
+		WHERE id=$1`, findingID, "[duplicate report by "+by+" on "+time.Now().UTC().Format(time.RFC3339)+"]\n"+extra); err != nil {
+		return err
+	}
+	var raw string
+	if err := tx.QueryRow(`SELECT COALESCE(asset_ids,'[]') FROM findings WHERE id=$1`, findingID).Scan(&raw); err != nil {
+		return err
+	}
+	var have []int64
+	_ = json.Unmarshal([]byte(raw), &have)
+	seen := make(map[int64]bool, len(have))
+	for _, x := range have {
+		seen[x] = true
+	}
+	for _, a := range in.AssetIDs {
+		if seen[a] {
+			continue
+		}
+		seen[a] = true
+		have = append(have, a)
+		if _, err := tx.Exec(`INSERT INTO exploration_anchors(node_id,asset_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, nodeID, a); err != nil {
+			return err
+		}
+	}
+	merged, _ := json.Marshal(have)
+	if _, err := tx.Exec(`UPDATE findings SET asset_ids=$2 WHERE id=$1`, findingID, string(merged)); err != nil {
+		return err
+	}
+	return nil
 }
 
 func findingTokens(s string) []string {

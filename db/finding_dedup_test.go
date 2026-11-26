@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -109,5 +110,129 @@ func TestRecordFindingNameFallback(t *testing.T) {
 	}
 	if name != "open-redirect" {
 		t.Fatalf("name fallback = %q, want vulnclass", name)
+	}
+}
+
+func TestRecordFindingMergesSameTargetAngle(t *testing.T) {
+	d := notifyTestDB(t)
+	ctx := context.Background()
+	tk, err := d.CreateTask("同目标不同角度", "目标", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(tk.ID)
+	es := d.Exploration(tk.ExplorationID)
+	a, err := d.Assets().UpsertOtherService(UpsertOtherServiceReq{IP: "10.9.9.11", Port: 80, ServiceName: "http", TaskID: tk.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := es.RecordFinding(ctx, RecordFindingInput{
+		TaskID: tk.ID, Worker: "w1", VulnClass: "information-disclosure", Severity: "medium",
+		Summary: "Unauthenticated GET /rest/memories leaks User objects with MD5 hashes", Evidence: "curl ...", AssetIDs: []int64{a},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := es.RecordFinding(ctx, RecordFindingInput{
+		TaskID: tk.ID, Worker: "w2", VulnClass: "information-disclosure", Severity: "medium",
+		Summary: "The /rest/memories endpoint publishes unsalted MD5 password hashes for every account", Evidence: "jq output", AssetIDs: []int64{a},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.Deduped || second.FindingID != first.FindingID {
+		t.Fatalf("same-target angle should merge, got %+v", second)
+	}
+	var evidence string
+	if err := d.QueryRow(`SELECT evidence FROM findings WHERE id=$1`, first.FindingID).Scan(&evidence); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(evidence, "curl ...") || !strings.Contains(evidence, "duplicate report by w2") || !strings.Contains(evidence, "jq output") {
+		t.Fatalf("evidence trail not merged: %q", evidence)
+	}
+}
+
+func TestRecordFindingKeepsDifferentEndpointsOnSameHost(t *testing.T) {
+	d := notifyTestDB(t)
+	ctx := context.Background()
+	tk, err := d.CreateTask("不同端点", "目标", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(tk.ID)
+	es := d.Exploration(tk.ExplorationID)
+	a, err := d.Assets().UpsertOtherService(UpsertOtherServiceReq{IP: "10.9.9.12", Port: 80, ServiceName: "http", TaskID: tk.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := es.RecordFinding(ctx, RecordFindingInput{
+		TaskID: tk.ID, Worker: "w", VulnClass: "sqli", Severity: "high",
+		Summary: "SQL injection in /rest/user/login email field", AssetIDs: []int64{a},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := es.RecordFinding(ctx, RecordFindingInput{
+		TaskID: tk.ID, Worker: "w", VulnClass: "sqli", Severity: "high",
+		Summary: "UNION-based SQL injection in /rest/products/search q parameter", AssetIDs: []int64{a},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Deduped || second.FindingID == first.FindingID {
+		t.Fatalf("distinct endpoints must stay separate, got %+v", second)
+	}
+}
+
+func TestRecordFindingCrossClassNeedsTwoSharedFacts(t *testing.T) {
+	d := notifyTestDB(t)
+	ctx := context.Background()
+	tk, err := d.CreateTask("跨类合并", "目标", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(tk.ID)
+	es := d.Exploration(tk.ExplorationID)
+	a, err := d.Assets().UpsertOtherService(UpsertOtherServiceReq{IP: "10.9.9.13", Port: 5432, ServiceName: "postgres", TaskID: tk.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := es.RecordFinding(ctx, RecordFindingInput{
+		TaskID: tk.ID, Worker: "w", VulnClass: "weak-credentials", Severity: "high",
+		Summary: "PostgreSQL 16.15 at 10.9.9.13:5432 accepts superuser password `labpass123`", AssetIDs: []int64{a},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	merged, err := es.RecordFinding(ctx, RecordFindingInput{
+		TaskID: tk.ID, Worker: "w", VulnClass: "excessive-privileges", Severity: "high",
+		Summary: "PostgreSQL 16.15 superuser at 10.9.9.13:5432 grants OS command execution", AssetIDs: []int64{a},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !merged.Deduped {
+		t.Fatal("two shared facts across classes should merge")
+	}
+
+	// Same path, different classes, no second shared fact → stay separate.
+	b, err := d.Assets().UpsertOtherService(UpsertOtherServiceReq{IP: "10.9.9.14", Port: 80, ServiceName: "http", TaskID: tk.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := es.RecordFinding(ctx, RecordFindingInput{
+		TaskID: tk.ID, Worker: "w", VulnClass: "xss", Severity: "medium",
+		Summary: "Reflected XSS in /rest/products/search q param", AssetIDs: []int64{b},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	separate, err := es.RecordFinding(ctx, RecordFindingInput{
+		TaskID: tk.ID, Worker: "w", VulnClass: "sqli", Severity: "high",
+		Summary: "UNION SQL injection in /rest/products/search q param", AssetIDs: []int64{b},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if separate.Deduped {
+		t.Fatal("one shared path across classes must stay separate")
 	}
 }
