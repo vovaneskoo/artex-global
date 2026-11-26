@@ -70,6 +70,7 @@ curl -sS -D - -o /dev/null http://<host>:<port>/ | tee work/evidence/web/<port>-
 
 JSON 404s, /swagger, /openapi.json, /api/* → ALSO load skill `api-assault`.
 Admin/monitoring panel found (Grafana, Jenkins, phpMyAdmin, /admin) → ALSO load skill `admin-panel-abuse`.
+Custom app with thin generic discovery → load skill `target-vocab-recon`: mine the bundle/markup vocabulary into work/vocab.txt and probe with differentials, not a fresh SecLists sweep.
 
 NEXT: collect every "component + exact version" from headers, whatweb, swagger, login pages → Phase 3 list.
 
@@ -117,6 +118,10 @@ msfconsole -q -x "use <module-path>; set RHOSTS <host>; set RPORT <port>; set PA
 
 Success = command execution OR a valid session/credential. Record HOW + proof, then Phase 5. All branches exhausted → record blockers, next host.
 
+## The chain graph (load `exploit-chaining` on the FIRST confirmed primitive)
+
+A primitive is a key, not a finding. Maintain `work/chain.md`: every confirmed node lists the edges it unlocks (panel → datasource/SSRF/exec, LFI → config → creds, SSRF → IMDS, creds → reuse/DB, JWT → admin). Always walk the top open edge (payoff rank − cost rank) before any new flat discovery or brute branch. Secrets harvested are new edge sources, never leaves. Only run Phase 4 branches A-C when the graph has no open edge above cost:med.
+
 ## Phase 5 - Foothold to root (≤15 actions)
 
 Load skill `privesc-lateral-persistence` for the full checklists. Native quick pass on Linux:
@@ -146,7 +151,7 @@ Load skill `finding-quality-reporting`. Every finding needs: command + output ex
 
 ## Phase 8 - Report and wrap (≤5 actions; mandatory at 80% budget)
 
-Load skill `deliverable-engineering`; write work/report.md: per-host summary, findings by severity with proof excerpts (masked), loot inventory, blockers, untested surface. If a hard stop/timeout killed earlier runs → load skill `autonomy-budget-pacing` and reconstruct from artifacts per its recovery procedure.
+Load skill `mission-distill` FIRST (bounded, ≤3 addenda from our own evidence → work/distill/), then skill `deliverable-engineering`; write work/report.md: per-host summary, findings by severity with proof excerpts (masked), loot inventory, blockers, untested surface, and the chain paths as the impact story. If a hard stop/timeout killed earlier runs → load skill `autonomy-budget-pacing` and reconstruct from artifacts per its recovery procedure.
 
 ## Decision rules
 
