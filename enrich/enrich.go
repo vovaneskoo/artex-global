@@ -30,12 +30,13 @@ type jobKind int
 const (
 	jobDNS  jobKind = iota // resolve a domain
 	jobHTTP                // probe a web asset (site)
+	jobCVE                 // map a version fingerprint to exploit candidates
 )
 
 type job struct {
 	kind jobKind
-	id   int64  // asset id (domain for DNS, site for HTTP)
-	arg  string // host (DNS) or url (HTTP)
+	id   int64  // asset id (domain for DNS, site for HTTP, any asset for CVE)
+	arg  string // host (DNS), url (HTTP) or fingerprint string (CVE)
 }
 
 // Engine owns the resolver, the proxy-routed HTTP client, and the worker pool.
@@ -43,6 +44,7 @@ type Engine struct {
 	as     *db.AssetStore
 	resolv *dnsx.DNSX
 	client *http.Client
+	cve    *cveEnricher
 
 	jobs   chan job
 	cool   sync.Map // dedup/cooldown: "kind:id" -> time.Time (last run)
@@ -78,6 +80,7 @@ func New(as *db.AssetStore, proxy func() string, workers int) *Engine {
 		as:     as,
 		resolv: resolv,
 		client: buildClient(proxy),
+		cve:    newCVEEnricher(),
 		jobs:   make(chan job, queueSize),
 		closed: make(chan struct{}),
 	}
@@ -121,6 +124,18 @@ func (e *Engine) ResolveDomain(id int64, host string) { e.enqueue(job{jobDNS, id
 // ProbeSite enqueues an HTTP probe for a web-asset (site). rawURL is the site URL.
 func (e *Engine) ProbeSite(id int64, rawURL string) { e.enqueue(job{jobHTTP, id, rawURL}) }
 
+// ResearchCVE enqueues an exploit-candidate lookup for an asset. fingerprint is
+// a free-form technology/version string (whatweb entry, HTTP header, joined
+// technologies array); the engine parses (product, version) pairs out of it and
+// attaches the candidate list to the asset's extra.cve. Versionless strings are
+// a no-op — no version evidence, no CVE claim.
+func (e *Engine) ResearchCVE(id int64, fingerprint string) {
+	if strings.TrimSpace(fingerprint) == "" {
+		return
+	}
+	e.enqueue(job{jobCVE, id, fingerprint})
+}
+
 func (e *Engine) enqueue(j job) {
 	if e == nil || id0(j.id) || j.arg == "" {
 		return
@@ -156,6 +171,8 @@ func (e *Engine) worker() {
 				e.doDNS(j.id, j.arg)
 			case jobHTTP:
 				e.doHTTP(j.id, j.arg)
+			case jobCVE:
+				e.doCVE(j.id, j.arg)
 			}
 		}
 	}
@@ -221,6 +238,13 @@ func (e *Engine) doDNS(id int64, host string) {
 
 var reTitle = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 
+// versionHeaders are the response headers that leak a product+version. They are
+// persisted on the asset (extra.http_headers) and fed to the CVE enricher.
+var versionHeaders = []string{
+	"Server", "X-Powered-By", "X-AspNet-Version", "X-AspNetMvc-Version",
+	"X-Generator", "X-Runtime", "X-Version", "Via",
+}
+
 func (e *Engine) doHTTP(id int64, rawURL string) {
 	host := hostOf(rawURL)
 	if host == "" {
@@ -240,12 +264,52 @@ func (e *Engine) doHTTP(id int64, rawURL string) {
 	statusCode := resp.StatusCode
 	bodyLen := int64(len(body))
 	title := extractTitle(body)
-	_, _ = e.as.UpsertHTTPService(db.UpsertHTTPServiceReq{
+	svcID, _ := e.as.UpsertHTTPService(db.UpsertHTTPServiceReq{
 		URL:           rawURL,
 		StatusCode:    &statusCode,
 		ContentLength: &bodyLen,
 		PageTitle:     title,
 	})
+
+	// Version-bearing headers: persist and enqueue the CVE lookup.
+	hdrs := map[string]string{}
+	var fp []string
+	for _, h := range versionHeaders {
+		if v := strings.TrimSpace(resp.Header.Get(h)); v != "" {
+			hdrs[h] = v
+			fp = append(fp, h+": "+v)
+		}
+	}
+	if len(hdrs) > 0 {
+		if svcID > 0 {
+			if err := e.as.MergeExtra(svcID, map[string]any{"http_headers": hdrs}); err != nil {
+				log.Printf("[enrich] http_headers 写回失败 id=%d: %v", svcID, err)
+			}
+		}
+		e.ResearchCVE(svcID, strings.Join(fp, "; "))
+	}
+}
+
+// doCVE maps a fingerprint string to exploit candidates and writes them onto
+// the asset (extra.cve). Candidates are hints for the planner/worker — the
+// applicability gate lives in the exploit-search skill, not here.
+func (e *Engine) doCVE(id int64, fingerprintStr string) {
+	if id <= 0 || e.cve == nil || !e.cve.enabled {
+		return
+	}
+	cands := e.cve.research(fingerprintStr)
+	if len(cands) == 0 {
+		return
+	}
+	patch := map[string]any{
+		"cve": map[string]any{
+			"updated":    time.Now().UTC().Format(time.RFC3339),
+			"candidates": cands,
+		},
+	}
+	if err := e.as.MergeExtra(id, patch); err != nil {
+		log.Printf("[enrich] cve 写回失败 id=%d: %v", id, err)
+	}
 }
 
 func extractTitle(body []byte) string {
