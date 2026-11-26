@@ -3,9 +3,39 @@ package server
 import (
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/Autumn-27/artex/db"
 )
+
+type cveCandidate struct{ cve, product, version, title string }
+
+func distinctCVEs(found []cveCandidate) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(found))
+	for _, c := range found {
+		if seen[c.cve] {
+			continue
+		}
+		seen[c.cve] = true
+		out = append(out, c.cve)
+	}
+	return out
+}
+
+// cveListLine renders up to max distinct CVEs plus an "(+N more)" tail.
+func cveListLine(found []cveCandidate, max int) string {
+	cves := distinctCVEs(found)
+	n := len(cves)
+	if n > max {
+		n = max
+	}
+	line := strings.Join(cves[:n], ", ")
+	if len(cves) > max {
+		line += fmt.Sprintf(" (+%d more)", len(cves)-max)
+	}
+	return line
+}
 
 // cveAutopilotFor returns the closure wired into workers of the given task:
 // when report_finding fires, we look up the finding's assets, check each for
@@ -40,8 +70,7 @@ func (s *Server) cveAutopilotFor(t *Task) func(assetIDs []int64, findingNodeID i
 			return
 		}
 		// Collect CVE candidates from the finding's assets (Extra["cve"]["candidates"]).
-		type candidate struct{ cve, product, version, title string }
-		var found []candidate
+		var found []cveCandidate
 		for _, a := range assets {
 			if a.Extra == nil {
 				continue
@@ -74,27 +103,15 @@ func (s *Server) cveAutopilotFor(t *Task) func(assetIDs []int64, findingNodeID i
 				product, _ := cm["product"].(string)
 				version, _ := cm["version"].(string)
 				title, _ := cm["title"].(string)
-				found = append(found, candidate{cve: cve, product: product, version: version, title: title})
+				found = append(found, cveCandidate{cve: cve, product: product, version: version, title: title})
 			}
 		}
 		if len(found) == 0 {
 			return
 		}
-		// Build the CVE list for the summary (compact, max 5 shown).
-		list := ""
-		n := len(found)
-		if n > 5 {
-			n = 5
-		}
-		for i := 0; i < n; i++ {
-			if i > 0 {
-				list += ", "
-			}
-			list += found[i].cve
-		}
-		if len(found) > 5 {
-			list += fmt.Sprintf(" (+%d more)", len(found)-5)
-		}
+		// The summary must be one line per distinct CVE: EDB often carries the
+		// same CVE in several exploits, and repeating it reads like noise.
+		list := cveListLine(found, 5)
 		payload := map[string]any{
 			"summary": fmt.Sprintf(
 				"Exploit assessment: confirmed finding %q on affected assets. "+
@@ -114,7 +131,7 @@ func (s *Server) cveAutopilotFor(t *Task) func(assetIDs []int64, findingNodeID i
 		if err := t.Store.Link(findingNodeID, db.RelDerivedFrom, intentID); err != nil {
 			log.Printf("[autopilot] edge link failed: %v", err)
 		}
-		log.Printf("[autopilot] spawned exploit-assessment intent #%d from finding node #%d (%d CVE candidates: %s)",
-			intentID, findingNodeID, len(found), list)
+		log.Printf("[autopilot] spawned exploit-assessment intent #%d from finding node #%d (%d candidates, %d distinct CVE: %s)",
+			intentID, findingNodeID, len(found), len(distinctCVEs(found)), list)
 	}
 }
